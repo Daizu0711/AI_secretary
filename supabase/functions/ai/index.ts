@@ -280,7 +280,11 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authErr } = await userClient.auth.getUser();
     if (authErr || !user) {
       await logAi({ userId: null, provider: "-", purpose: "auth", ok: false, error: authErr?.message });
-      return Response.json({ error: "unauthorized" }, { status: 401, headers: cors });
+      const bearer = (auth.split(" ")[1] ?? "");
+      const hint = bearer === SUPABASE_ANON_KEY
+        ? "not signed in: anon key only (アプリでログインしてから呼んでください)"
+        : `unauthorized: ${authErr?.message ?? "invalid token"}`;
+      return Response.json({ error: hint }, { status: 401, headers: cors });
     }
 
     const body = await req.json();
