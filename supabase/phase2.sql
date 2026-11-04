@@ -70,6 +70,33 @@ alter table public.managebac_tasks add column if not exists detail text;
 alter table public.managebac_tasks add column if not exists detail_title text;
 alter table public.managebac_tasks add column if not exists detail_fetched_at timestamptz;
 
+-- ---------- Googleカレンダー連携 (gcal) ----------
+create table if not exists public.sec_gcal (
+  user_id       uuid primary key references auth.users(id) on delete cascade,
+  refresh_token text not null,
+  access_token  text,
+  token_expiry  timestamptz,
+  calendar_id   text default 'primary',
+  sync_enabled  boolean not null default true,
+  last_sync     timestamptz,
+  updated_at    timestamptz not null default now()
+);
+create or replace view public.sec_gcal_status as
+  select user_id, calendar_id, sync_enabled, last_sync,
+         (refresh_token is not null) as connected
+  from public.sec_gcal;
+grant select on public.sec_gcal_status to authenticated;
+
+alter table public.sec_items       add column if not exists gcal_event_id text;
+alter table public.sec_items       add column if not exists gcal_synced_at timestamptz;
+alter table public.managebac_tasks add column if not exists gcal_event_id text;
+alter table public.managebac_tasks add column if not exists gcal_synced_at timestamptz;
+
+alter table public.sec_gcal enable row level security;
+drop policy if exists sec_gcal_deny on public.sec_gcal;
+create policy sec_gcal_deny on public.sec_gcal
+  for all to authenticated using (false) with check (false);
+
 -- ---------- RLS 修復: 「DBにはあるのにアプリで見えない」対策 ----------
 -- 1) user_id の自動補完(アプリは insert 時に user_id を送らないため必須)
 alter table public.sec_items            alter column user_id set default auth.uid();

@@ -113,6 +113,31 @@ create table if not exists public.managebac_import_log (
 create index if not exists managebac_import_log_finished_idx
   on public.managebac_import_log (finished_at desc);
 
+-- ---------- sec_gcal: Googleカレンダー連携トークン (クライアントからは不可視) ----------
+create table if not exists public.sec_gcal (
+  user_id       uuid primary key references auth.users(id) on delete cascade,
+  refresh_token text not null,                 -- ← Edge Function(サービスロール)だけが触る
+  access_token  text,
+  token_expiry  timestamptz,
+  calendar_id   text default 'primary',
+  sync_enabled  boolean not null default true,
+  last_sync     timestamptz,
+  updated_at    timestamptz not null default now()
+);
+
+-- クライアントには接続状態だけ見せるビュー(refresh_tokenは含めない)
+create or replace view public.sec_gcal_status as
+  select user_id, calendar_id, sync_enabled, last_sync,
+         (refresh_token is not null) as connected
+  from public.sec_gcal;
+grant select on public.sec_gcal_status to authenticated;
+
+-- カレンダーへ書き出した印
+alter table public.sec_items       add column if not exists gcal_event_id text;
+alter table public.sec_items       add column if not exists gcal_synced_at timestamptz;
+alter table public.managebac_tasks add column if not exists gcal_event_id text;
+alter table public.managebac_tasks add column if not exists gcal_synced_at timestamptz;
+
 -- ---------- updated_at 自動更新 ----------
 create or replace function public.sec_touch_updated_at()
 returns trigger language plpgsql as $$
@@ -141,6 +166,7 @@ alter table public.managebac_tasks      enable row level security;
 alter table public.managebac_import_log enable row level security;
 alter table public.sec_hermes_jobs      enable row level security;
 alter table public.sec_push_subscriptions enable row level security;
+alter table public.sec_gcal             enable row level security;
 
 -- 自分の行だけ読み書き (仕様書 §3)
 drop policy if exists sec_items_own on public.sec_items;
@@ -174,6 +200,11 @@ create policy sec_hermes_jobs_own on public.sec_hermes_jobs
 drop policy if exists sec_push_subscriptions_own on public.sec_push_subscriptions;
 create policy sec_push_subscriptions_own on public.sec_push_subscriptions
   for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- sec_gcal はクライアントから一切読み書きさせない(トークン漏洩防止。状態は sec_gcal_status ビュー経由)
+drop policy if exists sec_gcal_deny on public.sec_gcal;
+create policy sec_gcal_deny on public.sec_gcal
+  for all to authenticated using (false) with check (false);
 
 -- ---------- Realtime (アプリの購読用) ----------
 do $$

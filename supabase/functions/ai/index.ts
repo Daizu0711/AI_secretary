@@ -57,12 +57,15 @@ type Tried = { provider: string; ok: boolean };
 const TOOLS: { name: string; description: string; args: Record<string, string> }[] = [
   { name: "list_items", description: "タスク/メモを読む。ai_hidden(AI非公開)の行は含まれない。計画・要約・進捗確認では必ず先にこれを呼ぶ。", args: { kind: "'task'|'note'|省略で全部", include_done: "boolean 省略で未完了のみ" } },
   { name: "list_memory", description: "保存済みの記憶を読む。", args: {} },
+  { name: "list_mb_tasks", description: "ManageBacから取り込んだ課題(managebac_tasks)を読む。今日の計画にはこれも含める。", args: { only_open: "boolean 省略で未完了のみ(Submitted/Complete系は除外)" } },
   { name: "propose_add_task", description: "タスク追加の提案(承認されるまで追加しない)", args: { title: "string 必須", due: "ISO8601|null", est_minutes: "number|null 見積り分", category: "string", notes: "string" } },
   { name: "propose_add_note", description: "メモ追加の提案", args: { title: "string 必須", body: "string", category: "string" } },
   { name: "propose_update_item", description: "既存タスク/メモの更新提案", args: { id: "string 必須", title: "string?", body: "string?", category: "string?", est_minutes: "number?", due: "ISO8601?" } },
   { name: "propose_complete_task", description: "タスク完了の提案", args: { id: "string 必須", actual_min: "number? 実績分(見積り学習用)" } },
   { name: "propose_delete_item", description: "削除の提案", args: { id: "string 必須" } },
   { name: "propose_memory", description: "記憶に保存する提案", args: { text: "string 必須" } },
+  { name: "propose_schedule", description: "タスクの「いつやるか」の割り当て提案。承認で scheduled_start/scheduled_end が設定される。", args: { id: "string 必須", scheduled_start: "ISO8601 必須", scheduled_end: "ISO8601 必須" } },
+  { name: "propose_estimate", description: "est_minutes が無いタスクへの完了時間(分)の推定提案。承認で est_minutes に入る。", args: { id: "string 必須", est_minutes: "number 必須", reason: "string 推定理由" } },
 ];
 
 const SYSTEM_PROMPT = `あなたはユーザー専属のAI秘書です。日本語で簡潔に答えます。
@@ -70,7 +73,9 @@ const SYSTEM_PROMPT = `あなたはユーザー専属のAI秘書です。日本�
 - タスク/メモについて答える前に、必ず list_items / list_memory で実データを読んでから答えること。
 - 追加・更新・完了・削除・記憶の保存は propose_* ツールで「提案」だけを出すこと。適用はユーザーの承認後にアプリが行う。
 - list_items には ai_hidden(AI非公開)の項目は含まれない。見えないデータがある前提で勝手な推測をしないこと。
-- 今日の計画の相談では、list_items の期限・est_minutes・scheduled_start を踏まえて具体的に答えること。
+- 今日の計画の相談では、list_items と list_mb_tasks の両方を読み、期限・est_minutes・scheduled_start を踏まえて具体的に答えること。
+- est_minutes が無いタスクは、種別・内容・過去の実績から完了時間を推定し、propose_estimate で提案すること。
+- 「いつやるか」の割り当ては propose_schedule で scheduled_start/scheduled_end を提案すること(承認後にタイムラインへ反映される)。
 - EE/IA/TOKなどの本文の代筆はしない。構成案・論点・質問・次の一歩までにすること。`;
 
 // ---------- Supabase ----------
@@ -215,6 +220,16 @@ async function runTool(sb: ReturnType<typeof serviceClient>, userId: string, cal
     }
     case "list_memory": {
       const { data, error } = await sb.from("sec_memory").select("id,text,created_at").eq("user_id", userId).order("created_at");
+      if (error) return `error: ${error.message}`;
+      return JSON.stringify(data ?? []);
+    }
+    case "list_mb_tasks": {
+      const onlyOpen = call.args.only_open !== false;
+      let q = sb.from("managebac_tasks")
+        .select("task_id,class_name,title,kind,status,submittable,due,due_iso,detail,url,fetched_at,gcal_event_id")
+        .order("due_iso", { ascending: true, nullsFirst: false });
+      if (onlyOpen) q = q.not("status", "in", '("Submitted","Complete","Excused")');
+      const { data, error } = await q.limit(100);
       if (error) return `error: ${error.message}`;
       return JSON.stringify(data ?? []);
     }

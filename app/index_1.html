@@ -1038,7 +1038,11 @@ document.addEventListener("visibilitychange", () => {
 // ================== データ ==================
 async function loadItems() {
   if (!loadedOnce) { loadingItems = true; renderBody(); }
-  const { data, error } = await sb.from("sec_items").select("*").order("created_at", { ascending: false });
+  const [r1, r2] = await Promise.all([
+    sb.from("sec_items").select("*").order("created_at", { ascending: false }),
+    sb.from("managebac_tasks").select("*").order("due_iso", { ascending: true, nullsFirst: false }),
+  ]);
+  const { data, error } = r1;
   loadingItems = false;
   if (error) {
     // 一度でも読めていれば、手元の表示は消さずに通知だけにする
@@ -1050,7 +1054,15 @@ async function loadItems() {
   }
   loadError = "";
   loadedOnce = true;
-  items = data || [];
+  // ManageBac課題を読み取り専用アイテムとしてマージ (id は mb_ 付き、mb フラグで区別)
+  const mbRows = (r2.data || []).map(t => ({
+    id: "mb_" + t.task_id, mb: true, kind: "task", title: t.title,
+    due: t.due_iso, category: t.class_name || "ManageBac", est_minutes: null,
+    done: ["Submitted", "Complete", "Excused"].includes(t.status),
+    body: t.detail || "", url: t.url, mb_status: t.status || "", submittable: !!t.submittable,
+    created_at: t.fetched_at, updated_at: t.fetched_at,
+  }));
+  items = [...(data || []), ...mbRows];
   renderBody();
   if (items.some(i => i.kind === "task" && !i.done) && localStorage.getItem("sec_autoplan") !== "0") {
     setTimeout(() => autoPlan({ silent: true }), 500);
@@ -1173,12 +1185,13 @@ function rowHTML(i) {
     i.due ? `<span class="chip ${over ? "over" : ""}">${esc(fmtDue(i.due))}</span>` : "",
     i.category ? `<span class="chip gray">${esc(i.category)}</span>` : "",
     i.est_minutes ? `<span class="chip gray">${i.est_minutes}分</span>` : "",
+    i.mb ? `<span class="chip gray">MB${i.mb_status ? ":" + esc(i.mb_status) : ""}</span>` : "",
     i.ai_hidden ? `<span class="chip gray">AI非公開</span>` : "",
   ].join("");
-  const body = i.kind === "note" && i.body ? `<div class="sub" style="margin-top:4px">${esc(i.body.slice(0, 140))}</div>` : "";
+  const body = !i.mb && i.kind === "note" && i.body ? `<div class="sub" style="margin-top:4px">${esc(i.body.slice(0, 140))}</div>` : "";
   return `<div class="row ${i.done ? "done" : ""} ${over ? "overdue" : ""}" data-id="${i.id}">
-    ${i.kind === "task" ? `<button class="chk" data-act="toggle" aria-label="${i.done ? "未完了に戻す" : "完了にする"}" aria-pressed="${i.done}"></button>` : ""}
-    <div class="rb" data-act="edit"><div class="rt">${esc(i.title)}</div>${chips ? `<div class="rm">${chips}</div>` : ""}${body}</div>
+    ${i.kind === "task" && !i.mb ? `<button class="chk" data-act="toggle" aria-label="${i.done ? "未完了に戻す" : "完了にする"}" aria-pressed="${i.done}"></button>` : ""}
+    <div class="rb" data-act="${i.mb ? "open-mb" : "edit"}"><div class="rt">${esc(i.title)}</div>${chips ? `<div class="rm">${chips}</div>` : ""}${body}</div>
     <svg class="go" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></div>`;
 }
 
@@ -1247,6 +1260,7 @@ $("#listBody").addEventListener("click", async e => {
   if (el.dataset.act === "clear-search") { searchQ = ""; renderHead(); renderBody(); return; }
   if (el.dataset.act === "replan") { autoPlan({ manual: true }); return; }
   const row = el.closest(".row, .tlrow"); const it = items.find(x => x.id === row?.dataset.id); if (!it) return;
+  if (it.mb) { if (it.url) window.open(it.url, "_blank", "noopener"); else toast("ManageBacで開いてください"); return; }
   if (el.dataset.act === "toggle") setDone(it.id, !it.done);
   else openEditor(it);
 });
@@ -1383,6 +1397,12 @@ function renderSettings() {
     <div class="card"><h3>${ico.ai}AI接続</h3>
       <div class="setline"><div class="sub" id="aiTestOut">Gemini → NVIDIA NIM の順で試します</div><button class="btn ghost" id="aiTest">テスト</button></div>
     </div>
+    <div class="card"><h3>${ico.ai}Googleカレンダー</h3>
+      <p class="desc">タスクとManageBac課題をGoogleカレンダーにも予定として登録します(アプリ→カレンダーの書き込みのみ)。</p>
+      <div class="setline"><div class="sub" id="gcalStatus">確認中…</div>
+        <div class="addrow" style="margin:0"><button class="btn ghost" id="gcalSync">同期</button><button class="btn" id="gcalConnect">連携する</button><button class="btn ghost" id="gcalDisc">解除</button></div>
+      </div>
+    </div>
     <div class="card"><h3>${ico.wave}音声と計画</h3>
       <label class="toggle"><input type="checkbox" id="optGreet" ${greetOn ? "checked" : ""}> 起動時に声で挨拶する</label>
       <label class="toggle"><input type="checkbox" id="optRead" ${readOn ? "checked" : ""}> 秘書の返答を読み上げる</label>
@@ -1414,6 +1434,39 @@ function renderSettings() {
     if (r.error) out.innerHTML = `<span class="dot off"></span>失敗: ${esc(r.error)}`;
     else out.innerHTML = `<span class="dot"></span>OK — ${esc(r.provider || "")}${r.tried && r.tried.length > 1 ? " / フォールバックあり" : ""}`;
   };
+  async function gcal(action, extra = {}) {
+    const { data, error } = await sb.functions.invoke("gcal", { body: { action, ...extra } });
+    if (error) { let m = error.message; try { m = (await error.context.json()).error || m; } catch (_) {} throw new Error(m); }
+    return data;
+  }
+  function refreshGcalStatus() {
+    const out = $("#gcalStatus"); if (!out) return;
+    gcal("status").then(r => {
+      out.textContent = r.connected
+        ? `接続済み(最終同期: ${r.last_sync ? new Date(r.last_sync).toLocaleString("ja-JP") : "未同期"})`
+        : "未接続";
+    }).catch(() => { out.textContent = "状態を取得できませんでした"; });
+  }
+  $("#gcalConnect").onclick = async () => {
+    try {
+      const r = await gcal("auth_url", { state: location.origin + location.pathname });
+      location.href = r.url; // Google同意画面へ
+    } catch (e) { toast("連携URLの取得に失敗: " + e.message, 4000); }
+  };
+  $("#gcalSync").onclick = async () => {
+    const out = $("#gcalStatus");
+    out.textContent = "同期中…";
+    try {
+      const r = await gcal("sync");
+      out.textContent = `接続済み(作成${r.created}件・更新${r.updated}件 / ${new Date(r.synced_at).toLocaleString("ja-JP")})`;
+      toast("Googleカレンダーへ同期しました");
+    } catch (e) { out.textContent = "同期失敗: " + e.message; toast("同期に失敗しました", 3000); }
+  };
+  $("#gcalDisc").onclick = async () => {
+    try { await gcal("disconnect"); toast("連携を解除しました"); refreshGcalStatus(); }
+    catch (e) { toast(e.message, 4000); }
+  };
+  refreshGcalStatus();
   $("#export").onclick = () => {
     const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), items, memory }, null, 2)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "secretary-export.json"; a.click();
@@ -1572,6 +1625,11 @@ function describe(p) {
     case "propose_complete_task": return `完了にする: ${titleOf(a.id)}`;
     case "propose_delete_item": return `削除: ${titleOf(a.id)}`;
     case "propose_memory": return `覚える: ${a.text}`;
+    case "propose_schedule": {
+      const f = iso => new Date(iso).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      return `時間割り当て: ${titleOf(a.id)} → ${f(a.scheduled_start)}〜${f(a.scheduled_end)}`;
+    }
+    case "propose_estimate": return `見積り推定: ${titleOf(a.id)} → ${a.est_minutes}分${a.reason ? `(${a.reason})` : ""}`;
     default: return p.tool;
   }
 }
@@ -1608,6 +1666,17 @@ async function applyProposal(p) {
     case "propose_memory": {
       const { data } = must(await sb.from("sec_memory").insert({ text: a.text }).select().single());
       return async () => { await sb.from("sec_memory").delete().eq("id", data.id); };
+    }
+    case "propose_schedule": {
+      const prev = items.find(x => x.id === a.id); if (!prev) throw new Error("対象が見つかりません");
+      const old = { scheduled_start: prev.scheduled_start ?? null, scheduled_end: prev.scheduled_end ?? null };
+      must(await sb.from("sec_items").update({ scheduled_start: toIso(a.scheduled_start), scheduled_end: toIso(a.scheduled_end) }).eq("id", a.id));
+      return async () => { await sb.from("sec_items").update(old).eq("id", a.id); };
+    }
+    case "propose_estimate": {
+      const prev = items.find(x => x.id === a.id); if (!prev) throw new Error("対象が見つかりません");
+      must(await sb.from("sec_items").update({ est_minutes: a.est_minutes }).eq("id", a.id));
+      return async () => { await sb.from("sec_items").update({ est_minutes: prev.est_minutes ?? null }).eq("id", a.id); };
     }
     default: throw new Error("未対応の操作");
   }
@@ -1714,6 +1783,10 @@ addEventListener("online", () => updateNet(true));
 addEventListener("offline", () => updateNet(true));
 
 // ================== 起動 ==================
+if (new URLSearchParams(location.search).get("gcal") === "connected") {
+  toast("Googleカレンダーと連携しました。「同期」で予定を書き出せます", 5000);
+  history.replaceState(null, "", location.pathname);
+}
 chatHist.slice(-10).forEach(m => bubble(m.role === "user" ? "user" : "ai", m.content));
 if (!chatHist.length) bubble("sys", "秘書です。予定・タスク・メモ・計画の相談を話しかけてください。変更は提案として出るので、確認して「適用」を押します。");
 showPrompts();
