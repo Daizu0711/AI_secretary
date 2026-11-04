@@ -145,3 +145,64 @@
   .loading-content{display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text);background:var(--glass2);padding:24px 32px;border-radius:var(--r);box-shadow:0 20px 60px rgba(0,0,0,.25)}
 
   /* ナビ */
+
+  #nav button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;position:relative;
+    font-size:10.5px;line-height:1;padding:7px 2px 6px}
+  #nav button svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;opacity:.85;flex:0 0 auto}
+  #nav button.on svg{opacity:1}
+  .badge{position:absolute;top:2px;right:50%;margin-right:-22px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;
+    background:var(--accent);color:#fff;font-size:9.5px;font-weight:700;line-height:15px;text-align:center;font-style:normal}
+  .badge[hidden]{display:none}
+  @media (min-width:820px){
+    #nav button{flex-direction:row;gap:6px;font-size:13px;padding:8px 16px}
+    .badge{top:2px;right:6px;margin-right:0}
+  }
+  @media (min-width:1180px){ .badge{top:50%;right:12px;transform:translateY(-50%)} #nav button{justify-content:flex-start} }
+
+  /* 今日ヘッダー */
+  .headrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .greet{font-size:12.5px;color:var(--sub);margin-bottom:3px;letter-spacing:.02em}
+  .ring{--p:0%;width:56px;height:56px;border-radius:50%;flex:0 0 auto;
+    background:conic-gradient(var(--accent) var(--p), var(--line) 0);display:grid;place-items:center;transition:transform .3s ease}
+  .ring:hover{transform:scale(1.05)}
+  .ring span{width:44px;height:44px;border-radius:50%;background:var(--bg);display:grid;place-items:center;
+    font-size:12px;font-weight:700;letter-spacing:-.02em;box-shadow:0 2px 8px rgba(0,0,0,.1);transition:all .3s ease}
+  .ring:hover span{transform:scale(1.1)}
+  .meta{display:flex;gap:12px;align-items:center;margin-top:9px;font-size:11.5px;color:var(--sub);flex-wrap:wrap}
+  .meta em{font-style:normal;color:var(--text);font-weight:600}
+  .meta .danger{color:var(--danger);font-weight:600}
+  .bar{height:4px;border-radius:2px;background:var(--line);margin-top:8px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;border-radius:2px;background:var(--accent);transition:width .5s cubic-bezier(.4,0,.2,1)}
+
+  /* 検索 */
+  .searchrow{position:relative;margin-top:8px}
+  .searchrow svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px;height:15px;
+    stroke:var(--sub);fill:none;stroke-width:2;pointer-events:none}
+  .searchrow input{width:100%;border:1px solid var(--line);background:var(--glass2);border-radius:12px;
+    padding:9px 12px 9px 33px;font-size:15px;outline:none}
+  .searchrow input:focus{border-color:var(--accent)}
+
+  /* リスト */
+  .row{position:relative;transition:box-shadow .18s ease,transform .18s ease}
+  .row:hover{box-shadow:0 6px 20px rgba(80,50,20,.07);transform:translateY(-1px)}
+  .row.overdue::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:3px;border-radius:0 3px 3px 0;background:rgba(214,69,61,.55)}
+  .chk{position:relative;transition:background .16s ease,border-color .16s ease}
+  .chk::after{content:"";position:absolute;left:6px;top:4px;width:9px;height:5px;border-left:2px solid #fff;
+    border-bottom:2px solid #fff;transform:rotate(-45deg) scale(.3);opacity:0;transition:.16s ease}
+  .row.done .chk::after{opacity:1;transform:rotate(-45deg) scale(1)}
+  .grp{display:flex;align-items:center;gap:8px}
+  .grp::after{content:"";flex:1;height:1px;background:var(--line)}
+  .grp .n{font-variant-numeric:tabular-nums;opacity:.8}
+  .grp.over{color:var(--danger)}
+  .grp.over::after{background:rgba(214,69,61,.25)}
+  .row .go{width:14px;height:14px;margin:4px 0 0;stroke:var(--sub);fill:none;stroke-width:2;opacity:.45;flex:0 0 auto}
+
+  /* 空 / 読み込み */
+  .sk{height:56px;border-radius:14px;margin-bottom:8px;background:linear-gradient(90deg,var(--line) 0%,rgba(255,255,255,.5) 50%,var(--line) 100%);
+    background-size:200% 100%;animation:sk 1.3s linear infinite;opacity:.45}
+  @keyframes sk{to{background-position:-200% 0}}
+  .empty .ico{width:64px;height:64px;margin:0 auto 16px;border-radius:20px;background:var(--accent-soft);display:grid;place-items:center;transition:transform .3s ease}
+.empty .ico svg{transition:transform .3s ease}
+.empty .ico:hover{transform:scale(1.1)}
+.empty .ico:hover svg{transform:scale(0.9)}
+  .empty .ico svg{width:24px;height:24px;stroke:var(--accent);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

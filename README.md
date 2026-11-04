@@ -23,9 +23,14 @@
 3. ManageBac 同期用に `.env` を作成(`.env.example` をコピー)してローカルで確認:
    ```
    cd "managebac auto"
-   .venv/bin/python sync_to_supabase.py --dry-run   # スクレイプのみ確認
-   .venv/bin/python sync_to_supabase.py             # Supabaseへ同期
+   .venv/bin/python sync_to_supabase.py --dry-run   # 一覧スクレイプのみ確認
+   .venv/bin/python sync_to_supabase.py             # 一覧+課題詳細を同期
+   .venv/bin/python sync_to_supabase.py --no-detail # 一覧のみ(詳細ページを叩かない)
+   .venv/bin/python managebac_client.py detail <class_id> <task_id>  # 詳細だけ確認
    ```
+   課題の詳細ページ(説明文)は `managebac_tasks.detail` に保存される。
+   未取得 or 24h以上経過のものだけを1回最大50件(`--detail-limit`)、1.2秒間隔で取得する
+   (アカウントBAN回避)。`detail_fetched_at` で最終取得時刻を管理。
 4. GitHub リポジトリを **private** にして、Actions Secrets に以下を登録:
    `MB_BASE_URL`, `MB_EMAIL`, `MB_PASSWORD`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
    (サービスロールキーを使わない場合は `SUPABASE_ANON_KEY` + `SB_EMAIL` + `SB_PASSWORD`)

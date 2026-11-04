@@ -262,6 +262,30 @@ class ManageBac:
     def class_tasks(self, class_id: str) -> list[dict]:
         return self._parse_tasks(self.get_html(f"/student/classes/{class_id}/core_tasks"))
 
+    def task_detail(self, class_id: str, task_id: str, max_chars: int = 8000) -> dict:
+        """課題詳細ページからタイトルと説明文を取る。
+        説明文は複数セレクタを試すが、構造が変わっても空で返す(例外は投げない)。"""
+        html = self.get_html(f"/student/classes/{class_id}/core_tasks/{task_id}")
+        soup = BeautifulSoup(html, "lxml")
+
+        title = None
+        for tag in ("h1", "h2", "h3"):
+            h = soup.find(tag)
+            if h and _norm(h.get_text(" ", strip=True)):
+                title = _norm(h.get_text(" ", strip=True))
+                break
+
+        detail = None
+        for sel in ('[class*="description"]', '[class*="instruction"]', '[class*="content"]', "article", "main"):
+            el = soup.select_one(sel)
+            if not el:
+                continue
+            text = _norm(el.get_text("\n", strip=True))
+            if len(text) > 20:
+                detail = text[:max_chars]
+                break
+        return {"task_id": task_id, "detail_title": title, "detail": detail}
+
 
 # ---------- FastAPI ----------
 def build_app():
@@ -294,6 +318,10 @@ def build_app():
     def tasks(class_id: str):
         return guard(lambda: mb.class_tasks(class_id))
 
+    @app.get("/detail/{class_id}/{task_id}")
+    def detail(class_id: str, task_id: str):
+        return guard(lambda: mb.task_detail(class_id, task_id))
+
     return app
 
 
@@ -317,12 +345,14 @@ def main():
         print(json.dumps(mb.deadlines(view), ensure_ascii=False, indent=2))
     elif command == "tasks" and len(sys.argv) > 2:
         print(json.dumps(mb.class_tasks(sys.argv[2]), ensure_ascii=False, indent=2))
+    elif command == "detail" and len(sys.argv) > 3:
+        print(json.dumps(mb.task_detail(sys.argv[2], sys.argv[3]), ensure_ascii=False, indent=2))
     elif command == "dump" and len(sys.argv) > 2:
         print(mb.get_html(sys.argv[2]))
     else:
         raise ManageBacError(
             "使い方: login | classes | deadlines | tasks <class_id> | "
-            "dump <path> | serve"
+            "detail <class_id> <task_id> | dump <path> | serve"
         )
 
 

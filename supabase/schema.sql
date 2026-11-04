@@ -64,6 +64,9 @@ create table if not exists public.managebac_tasks (
   url         text,
   context     text,
   views       text,                              -- 取り込み元ビュー(upcoming/overdue)
+  detail      text,                              -- 課題詳細ページの説明文
+  detail_title text,                             -- 詳細ページ側のタイトル
+  detail_fetched_at timestamptz,                 -- 詳細の最終取得時刻
   fetched_at  timestamptz,                       -- 最終取り込み時刻
   updated_at  timestamptz not null default now()
 );

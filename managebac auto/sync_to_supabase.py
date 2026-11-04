@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -152,10 +153,78 @@ def upsert_tasks(url: str, apikey: str, bearer: str, rows: list[dict]) -> None:
     r.raise_for_status()
 
 
+DETAIL_REFRESH_HOURS = 24   # detail を再取得する間隔
+DETAIL_MIN_INTERVAL = 1.2   # 詳細ページ取得の間隔(秒。BAN回避)
+
+
+def fetch_stale_detail_ids(url: str, apikey: str, bearer: str, task_ids: list[str]) -> set[str]:
+    """detail が未取得 or 24h以上前の task_id を返す。列が無い旧スキーマでは空集合を返す。"""
+    if not task_ids:
+        return set()
+    try:
+        r = requests.get(
+            f"{url}/rest/v1/managebac_tasks",
+            headers={"apikey": apikey, "Authorization": f"Bearer {bearer}"},
+            params={"select": "task_id,detail_fetched_at", "task_id": f"in.({','.join(task_ids)})"},
+            timeout=30,
+        )
+        r.raise_for_status()
+    except Exception:
+        return set(task_ids)  # 取得に失敗したら全部取得側に倒す(次回以降で拾う)
+    cutoff = datetime.now(timezone.utc).timestamp() - DETAIL_REFRESH_HOURS * 3600
+    stale = set()
+    seen = set()
+    for row in r.json():
+        tid = row.get("task_id")
+        seen.add(tid)
+        fa = row.get("detail_fetched_at")
+        if not fa or datetime.fromisoformat(fa.replace("Z", "+00:00")).timestamp() < cutoff:
+            stale.add(tid)
+    stale.update(t for t in task_ids if t not in seen)  # DBに無い新規課題
+    return stale
+
+
+def patch_detail(url: str, apikey: str, bearer: str, task_id: str, detail: str | None, detail_title: str | None, when: str) -> None:
+    requests.patch(
+        f"{url}/rest/v1/managebac_tasks",
+        headers={
+            "apikey": apikey,
+            "Authorization": f"Bearer {bearer}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+        params={"task_id": f"eq.{task_id}"},
+        json={"detail": detail, "detail_title": detail_title, "detail_fetched_at": when},
+        timeout=20,
+    ).raise_for_status()
+
+
+def sync_details(mb, url: str, apikey: str, bearer: str, tasks: list[dict], limit: int) -> int:
+    """未取得/ stale の課題詳細を取って保存する。件数を返す。1件ごとに間隔を空ける。"""
+    by_id = {t["id"]: t for t in tasks if t.get("id")}
+    stale = fetch_stale_detail_ids(url, apikey, bearer, list(by_id))
+    done = 0
+    for tid in sorted(stale)[:limit]:
+        t = by_id.get(tid)
+        if not t or not t.get("class_id"):
+            continue
+        try:
+            d = mb.task_detail(t["class_id"], tid)
+            patch_detail(url, apikey, bearer, tid, d.get("detail"), d.get("detail_title"),
+                         datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            done += 1
+        except Exception as e:
+            print(f"[detail] {tid} 失敗: {e}", file=sys.stderr)  # 個別失敗は続行
+        time.sleep(DETAIL_MIN_INTERVAL)
+    return done
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="スクレイプのみでSupabaseへ書かない")
     ap.add_argument("--json", action="store_true", help="結果サマリをJSONで出力")
+    ap.add_argument("--no-detail", action="store_true", help="課題詳細ページの取得をスキップ")
+    ap.add_argument("--detail-limit", type=int, default=50, help="1回の実行で詳細を取得する最大件数(既定50)")
     args = ap.parse_args()
 
     here = Path(__file__).resolve().parent
@@ -181,12 +250,15 @@ def main() -> int:
         url = os.environ["SUPABASE_URL"].rstrip("/")
         apikey, bearer = supabase_token()
         upsert_tasks(url, apikey, bearer, rows)
+        summary["detail_count"] = 0
+        if not args.no_detail:
+            summary["detail_count"] = sync_details(mb, url, apikey, bearer, tasks, args.detail_limit)
         log_import(url, apikey, bearer, True, None, len(rows), started)
         summary["ok"] = True
         if args.json:
             print(json.dumps(summary, ensure_ascii=False))
         else:
-            print(f"[sync] ok: {len(rows)}件を managebac_tasks へ upsert しました ({fetched_at})")
+            print(f"[sync] ok: {len(rows)}件を upsert、詳細 {summary['detail_count']}件取得 ({fetched_at})")
         return 0
 
     except Exception as e:

@@ -65,6 +65,11 @@ create index if not exists sec_items_user_due_idx on public.sec_items (user_id, 
 create index if not exists sec_items_sched_idx    on public.sec_items (user_id, scheduled_start);
 create index if not exists sec_items_done_idx     on public.sec_items (user_id, done);
 
+-- ---------- managebac_tasks: detail 列(課題詳細ページの説明文) ----------
+alter table public.managebac_tasks add column if not exists detail text;
+alter table public.managebac_tasks add column if not exists detail_title text;
+alter table public.managebac_tasks add column if not exists detail_fetched_at timestamptz;
+
 -- ---------- sec_memory: content → text ----------
 do $$
 begin
