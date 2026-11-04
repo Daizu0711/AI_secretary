@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standing Waves & Wave Phenomena Study</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --secondary: #3498db;
+            --accent: #e74c3c;
+            --success: #27ae60;
+            --bg: #f8f9fa;
+            --card: #ffffff;
+            --text: #333333;
+            --muted: #666666;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Language toggle */
+        .language-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--card);
+            padding: 8px 16px;
+            border-radius: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 100;
+            border: 1px solid #e0e0e0;
+        }
+
+        .lang-btn {
+            padding: 6px 12px;
+            margin: 0 4px;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+
+        .lang-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 60px 20px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            border-radius: 15px 15px 0 0;
+            margin: -20px -20px 30px -20px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 30px;
+            background: var(--card);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+
+        .tab-btn {
+            padding: 12px 20px;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .tab-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .tab-btn:hover:not(.active) {
+            background: #ecf0f1;
+        }
+
+        /* Sections */
+        .section {
+            display: none;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            transition: transform 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+        }
+
+        .card h3 {
+            margin-top: 0;
+            color: var(--primary);
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+
+        /* Controls */
+        .controls {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .control-group input,
+        .control-group select,
+        .control-group output {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        /* Sliders */
+        .slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #ddd;
+            outline: none;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--secondary);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .slider-value {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        /* Canvas areas */
+        .canvas-wrapper {
+            background: #fff;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            min-height: 300px;
+            position: relative;
+        }
+
+        .canvas-wrapper canvas {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            right: 15px;
+            background: rgba(255,255,255,0.9);
+                padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        /* Practice problems */
+        .problem {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid var(--secondary);
+        }
+
+        .problem h4 {
+            margin: 0 0 10px 0;
+            color: var(--primary);
+        }
+
+        .problem statement {
+            color: var(--text);
+            margin: 10px 0;
+        }
+
+        .problem .answer {
+            margin-top: 10px;
+            padding: 8px;
+            background: white;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .problem .answer.show {
+            display: block;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .tabs {
+                grid-template-columns: 1fr;
+            }
+
+            header h1 {
+                font-size: 2rem;
+            }
+
+            .language-toggle {
+                display: none;
+            }
+        }
+
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0s !important;
+                transition-duration: 0s !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Language Toggle -->
+    <div class="language-toggle" id="langToggle">
+        <button class="lang-btn active" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="jp">日本語</button>
+    </div>
+
+    <header>
+        <h1>Standing Waves & Wave Phenomena</h1>
+        <p>Interactive Study Guide with Visualizations & Practice Problems</p>
+    </header>
+
+    <div class="container">
+        <!-- Tabs -->
+        <div class="tabs" id="tabs">
+            <button class="tab-btn active" data-topic="sw">Standing Waves & Resonance</button>
+            <button class="tab-btn" data-topic="wp">Wave Phenomena</button>
+        </div>
+
+        <!-- Standing Waves Section -->
+        <div class="section active" id="sw-section">
+            <div class="card">
+                <h3>📊 Standing Waves Visualization</h3>
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="string-length">String Length (m)</label>
+                        <input type="range" id="string-length" min="0.5" max="5" step="0.1" value="2.0">
+                        <output id="length-value">2.0 m</output>
+                    </div>
+                    <div class="control-group">
+                        <label for="wave-speed">Wave Speed (m/s)</label>
+                        <input type="range" id="wave-speed" min="100" max="500" step="10" value="340">
+                        <output id="speed-value">340 m/s</output>
+                    </div>
+                    <div class="control-group">
+                        <label>Boundary Conditions</label>
+                        <select id="boundary">
+                            <option value="fixed-fixed">Fixed-Fixed (String)</option>
+                            <option value="open-open">Open-Open (Pipe)</option>
+                            <option value="closed-open" selected>Closed-Open (Pipe)</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label>Harmonic (n)</label>
+                        <input type="number" id="harmonic" min="1" max="10" step="1" value="1">
+                        <output id="harmonic-value">1st</output>
+                    </div>
+                </div>
+
+                <div class="canvas-wrapper">
+                    <canvas id="standing-wave-canvas" width="800" height="200"></canvas>
+                    <div class="legend">
+                        🟢 Antinode | ⚫ Node
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>📐 Key Formulas</h3>
+                    <ul style="line-height: 1.8;">
+                        <li><strong>Wavelength:</strong> λ = 2L/n (fixed-fixed/open-open), λ = 4L/n (n odd, closed-open)</li>
+                        <li><strong>Frequency:</strong> f = v/λ = n·v/(2L) or n·v/(4L)</li>
+                        <li><strong>Nodes:</strong> Fixed end = Node, Open end = Antinode</li>
+                        <li><strong>Harmonics:</strong> Only odd harmonics for closed-open pipes</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📝 Practice Problems</h3>
+                <div id="practice-sw">
+                    <!-- Problems loaded by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Wave Phenomena Section -->
+        <div class="section" id="wp-section">
+            <div class="card">
+                <h3>📊 Single-Slit Diffraction</h3>
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="wavelength">Wavelength (nm)</label>
+                        <input type="number" id="wavelength" min=300 max=800 step=10 value="600">
+                        <output id="wavelength-value">600 nm</output>
+                    </div>
+                    <div class="control-group">
+                        <label for="slit-width">Slit Width (µm)</label>
+                        <input type="number" id="slit-width" min=0.1 max=5 step="0.1" value="0.2">
+                        <output id="slit-value">0.2 µm</output>
+                    </div>
+                    <div class="control-group">
+                        <label>Screen Distance (m)</label>
+                        <input type="number" id="screen-dist" min="0.5" max="10" step="0.1" value="2.0">
+                        <output id="screen-value">2.0 m</output>
+                    </div>
+                    <div class="control-group">
+                        <label>Angle (θ)</label>
+                        <input type="number" id="angle" min="0" max="90" step="0.1" value="0">
+                        <output id="angle-value">0°</output>
+                    </div>
+                </div>
+
+                <div class="canvas-wrapper">
+                    <canvas id="diffraction-canvas" width="800" height="400"></canvas>
+                    <div class="legend">
+                        🟡 Central Max | ⚪ Minima | 🔵 Bright Fringes
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>📐 Key Formulas</h3>
+                    <ul style="line-height: 1.8;">
+                        <li><strong>First minimum:</strong> sin θ = λ / b</li>
+                        <li><strong>m-th minimum:</strong> sin θ = mλ / b (m = 1, 2, 3, ...)</li>
+                        <li><strong>Small angle:</strong> θ ≈ λ / b (radians)</li>
+                        <li><strong>Central max width:</strong> 2θ on screen</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📊 Diffraction Grating</h3>
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="grating-density">Lines/mm</label>
+                        <input type="number" id="grating-density" min=100 max=2400 step=100 value="600">
+                        <output id="grating-value">600 lines/mm</output>
+                    </div>
+                    <div class="control-group">
+                        <label for="light-wavelength">Wavelength (nm)</label>
+                        <input type="number" id="light-wavelength" min=300 max=800 step=10 value="650">
+                        <output id="light-value">650 nm</output>
+                    </div>
+                    <div class="control-group">
+                        <label>Order (n)</label>
+                        <input type="number" id="order" min="0" max="5" step="1" value="1">
+                        <output id="order-value">1st</output>
+                    </div>
+                </div>
+
+                <div class="canvas-wrapper">
+                    <canvas id="grating-canvas" width="800" height="400"></canvas>
+                    <div class="legend">
+                        🔴 Central (n=0) | 🟢 First Order | 🔵 Second Order
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>📐 Key Formulas</h3>
+                    <ul style="line-height: 1.8;">
+                        <li><strong>Maxima:</strong> nλ = d·sin θ (d = 1/lines per meter)</li>
+                        <li><strong>Max order:</strong> n_max = floor(d/λ)</li>
+                        <li><strong>Resolving power:</strong> R = λ/Δλ = nN</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📝 Practice Problems</h3>
+                <div id="practice-wp">
+                    <!-- Problems loaded by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // LANGUAGE SWITCHING
+        // ============================================
+        const translations = {
+            en: {
+                // Standing Waves
+                'sw-title': 'Standing Waves & Resonance',
+                'sw-intro': 'Study guide with visualizations and practice problems',
+                'length-label': 'String Length (m)',
+                'speed-label': 'Wave Speed (m/s)',
+                'boundary-label': 'Boundary Conditions',
+                'fixed-fixed': 'Fixed-Fixed (String)',
+                'open-open': 'Open-Open (Pipe)',
+                'closed-open': 'Closed-Open (Pipe)',
+                'harmonic-label': 'Harmonic (n)',
+                'harmonic-value': '1st',
+                'problems-title': 'Practice Problems',
+                'easy': 'Easy',
+                'medium': 'Medium',
+                'hard': 'Hard',
+                'q1': 'Q1: A string of length 1.2 m is fixed at both ends.',
+                'q1-ans': 'Answer: 51.7 Hz',
+                // ... more translations
+            },
+            jp: {
+                'sw-title': ' standing waves and resonance',
+                'sw-intro': '視覚化と問題練習付きの学習ガイド',
+                'length-label': '文字列の長さ (m)',
+                'speed-label': '波の速さ (m/s)',
+                'boundary-label': '境界条件',
+                'fixed-fixed': '固定-固定 (弦)',
+                'open-open': '開放-開放 (管)',
+                'closed-open': '閉鎖-開放 (管)',
+                'harmonic-label': '調和数 (n)',
+                'harmonic-value': '第1調和数',
+                'problems-title': '練習問題',
+                'easy': '易しい',
+                'medium': '中程度',
+                'hard': '困難',
+                'q1': 'Q1: 長さ1.2 mの固定両端の弦',
+                'q1-ans': '答え: 51.7 Hz',
+            }
+        };
+
+        function translate(lang) {
+            const trans = translations[lang];
+            document.querySelectorAll('[data-trans]').forEach(el => {
+                const key = el.getAttribute('data-trans');
+                if (trans[key]) el.textContent = trans[key];
+            });
+            document.querySelectorAll('.lang-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.lang === lang);
+            });
+        }
+
+        document.querySelectorAll('.lang-btn').forEach(btn => {
+            btn.addEventListener('click', () => translate(btn.dataset.lang));
+        });
+
+        // Initialize English
+        translate('en');
+
+        // ============================================
+        // STANDING WAVE CANVAS
+        // ============================================
+        const SW_CANVAS = document.getElementById('standing-wave-canvas');
+        const SW_CTX = SW_CANVAS.getContext('2d');
+        let SW_Width, SW_Height;
+
+        function resizeSWCanvas() {
+            SW_Width = SW_CANVAS.parentNode.clientWidth;
+            SW_Height = SW_CANVAS.parentNode.clientHeight || 200;
+            SW_CANVAS.width = SW_Width * 2;
+            SW_CANVAS.height = SW_Height * 2;
+            SW_CANVAS.style.width = SW_Width + 'px';
+            SW_CANVAS.style.height = SW_Height + 'px';
+            SW_CTX.scale(2, 2);
+            drawStandingWave();
+        }
+
+        window.addEventListener('resize', resizeSWCanvas);
+        resizeSWCanvas();
+
+        function drawStandingWave() {
+            SW_CTX.clearRect(0, 0, SW_Width, SW_Height);
+
+            const L = parseFloat(document.getElementById('string-length').value);
+            const v = parseFloat(document.getElementById('wave-speed').value);
+            const boundary = document.getElementById('boundary').value;
+            const n = parseInt(document.getElementById('harmonic').value);
+
+            // Calculate
+            let wavelength, frequency;
+            let nodePositions = [];
+
+            if (boundary === 'fixed-fixed' || boundary === 'open-open') {
+                wavelength = 2 * L / n;
+                frequency = n * v / (2 * L);
+            } else { // closed-open
+                if (n % 2 === 0) {
+                    // Even harmonics don't exist for closed-open
+                    document.getElementById('harmonic-value').textContent = 'invalid';
+                    return;
+                }
+                wavelength = 4 * L / n;
+                frequency = n * v / (4 * L);
+                document.getElementById('harmonic-value').textContent = ' ' + n + 'th';
+            }
+
+            document.getElementById('length-value').textContent = L.toFixed(1) + ' m';
+            document.getElementById('speed-value').textContent = v.toFixed(0) + ' m/s';
+            document.getElementById('harmonic-value').textContent = ' ' + (n === 1 ? 'fundamental' : n + 'th') + ' harmonic';
+
+            // Draw
+            SW_CTX.strokeStyle = '#2c3e50';
+            SW_CTX.lineWidth = 2;
+
+            const centerY = SW_Height / 4;
+            const amplitude = centerY * 0.4;
+            const startX = SW_Width * 0.1;
+            const endX = SW_Width * 0.9;
+
+            // Incident waves
+            SW_CTX.beginPath();
+            SW_CTX.strokeStyle = '#3498db';
+            SW_CTX.lineWidth = 1;
+            for (let x = 0; x <= SW_Width; x += 5) {
+                const t = x / v;
+                const y = amplitude * Math.sin(2 * Math.PI * (x / wavelength - t));
+                if (x === 0) SW_CTX.moveTo(x, centerY + y);
+                else SW_CTX.lineTo(x, centerY + y);
+            }
+            SW_CTX.stroke();
+
+            // Reflected waves
+            SW_CTX.beginPath();
+            SW_CTX.strokeStyle = '#e74c3c';
+            SW_CTX.lineWidth = 1;
+            for (let x = 0; x <= SW_Width; x += 5) {
+                const t = x / v;
+                const y = amplitude * Math.sin(2 * Math.PI * (-x / wavelength - t + Math.PI));
+                if (x === 0) SW_CTX.moveTo(x, centerY + y);
+                else SW_CTX.lineTo(x, centerY + y);
+            }
+            SW_CTX.stroke();
+
+            // Standing wave
+            SW_CTX.beginPath();
+            SW_CTX.strokeStyle = '#2c3e50';
+            SW_CTX.lineWidth = 3;
+
+            // Calculate nodes
+            nodePositions = [];
+            if (boundary === 'fixed-fixed' || boundary === 'open-open') {
+                for (let i = 0; i <= n; i++) {
+                    const nodeX = startX + (i * SW_Width / n);
+                    nodePositions.push(nodeX);
+                }
+            } else {
+                for (let i = 0; i <= n; i++) {
+                    const nodeX = startX + (i * 2 * SW_Width / n);
+                    nodePositions.push(nodeX);
+                }
+            }
+
+            // Draw standing wave using superposition
+            for (let x = startX; x <= endX; x += 2) {
+                const y1 = amplitude * Math.sin(2 * Math.PI * (x / wavelength));
+                const y2 = amplitude * Math.sin(2 * Math.PI * (-x / wavelength + Math.PI));
+                const y = y1 + y2;
+                if (x === startX) SW_CTX.moveTo(x, centerY + y);
+                else SW_CTX.lineTo(x, centerY + y);
+            }
+            SW_CTX.stroke();
+
+            // Draw nodes
+            SW_CTX.fillStyle = '#2c3e50';
+            nodePositions.forEach(pos => {
+                SW_CTX.beginPath();
+                SW_CTX.arc(pos, centerY, 5, 0, Math.PI * 2);
+                SW_CTX.fill();
+            });
+
+            // Draw antinodes
+            SW_CTX.fillStyle = '#27ae60';
+            for (let i = 0; i < n; i++) {
+                const antinodeX = startX + ((2 * i + 1) * SW_Width / (2 * n));
+                SW_CTX.beginPath();
+                SW_CTX.arc(antinodeX, centerY, 5, 0, Math.PI * 2);
+                SW_CTX.fill();
+            });
+
+            // Labels
+            SW_CTX.fillStyle = '#555';
+            SW_CTX.font = '10px Arial';
+            nodePositions.forEach((pos, i) => {
+                SW_CTX.fillText('N' + i, pos - 15, centerY - 8);
+            });
+        }
+
+        // Event listeners for SW controls
+        document.getElementById('string-length').addEventListener('input', (e) => {
+            document.getElementById('length-value').textContent = e.target.value + ' m';
+            drawStandingWave();
+        });
+
+        document.getElementById('wave-speed').addEventListener('input', (e) => {
+            document.getElementById('speed-value').textContent = e.target.value + ' m/s';
+            drawStandingWave();
+        });
+
+        document.getElementById('boundary').addEventListener('change', (e) => {
+            document.getElementById('harmonic-value').textContent = '…';
+            const nInput = document.getElementById('harmonic');
+            if (e.target.value === 'closed-open') {
+                nInput.max = 9;
+                nInput.value = 1;
+            } else {
+                nInput.max = 10;
+                nInput.value = 1;
+            }
+            drawStandingWave();
+        });
+
+        document.getElementById('harmonic').addEventListener('input', (e) => {
+            document.getElementById('harmonic-value').textContent = ' ' + e.target.value + 'th';
+            drawStandingWave();
+        });
+
+        // ============================================
+        // DIFFRACTION CANVAS
+        // ============================================
+        const DW_CANVAS = document.getElementById('diffraction-canvas');
+        const DW_CTX = DW_CANVAS.getContext('2d');
+        let DW_Width, DW_Height;
+
+        function resizeDWCanvas() {
+            DW_Width = DW_CANVAS.parentNode.clientWidth;
+            DW_Height = DW_CANVAS.parentNode.clientHeight || 400;
+            DW_CANVAS.width = DW_Width * 2;
+            DW_CANVAS.height = DW_Height * 2;
+            DW_CANVAS.style.width = DW_Width + 'px';
+            DW_CANVAS.style.height = DW_Height + 'px';
+            DW_CTX.scale(2, 2);
+            drawDiffraction();
+        }
+
+        window.addEventListener('resize', resizeDWCanvas);
+        resizeDWCanvas();
+
+        function drawDiffraction() {
+            DW_CTX.clearRect(0, 0, DW_Width, DW_Height);
+
+            const lambda = parseFloat(document.getElementById('wavelength').value) * 1e-9; // m
+            const b = parseFloat(document.getElementById('slit-width').value) * 1e-6; // m
+            const D = parseFloat(document.getElementById('screen-dist').value); // m
+
+            // Calculate first minimum angle
+            const theta = Math.asin(lambda / b);
+            const thetaDeg = theta * 180 / Math.PI;
+
+            document.getElementById('angle-value').textContent = thetaDeg.toFixed(1) + '°';
+
+            const centerX = DW_Width / 2;
+            const centerY = DW_Height / 2;
+            const scale = DW_Width / 4; // scale factor
+
+            // Draw slit
+            DW_CTX.fillStyle = '#2c3e50';
+            const slitWidthPx = (lambda / b) * DW_Width * 2 + 20;
+            DW_CTX.fillRect(centerX - slitWidthPx / 2, centerY - 20, slitWidthPx, 40);
+
+            // Draw screen
+            DW_CTX.fillStyle = '#fff';
+            DW_CTX.fillRect(centerX - 5, centerY + 50, 10, DW_Height / 2 - 60);
+
+            // Calculate minima positions
+            const minima = [];
+            for (let m = 1; m <= 5; m++) {
+                const sinTheta = m * lambda / b;
+                if (Math.abs(sinTheta) <= 1) {
+                    const thetaM = Math.asin(sinTheta);
+                    const pos = centerX + thetaM * scale;
+                    minima.push({ m, pos, theta: thetaM * 180 / Math.PI });
+                }
+            }
+
+            // Draw diffraction pattern
+            DW_CTX.strokeStyle = '#e74c3c';
+            DW_CTX.lineWidth = 2;
+
+            // Central maximum
+            DW_CTX.fillStyle = '#f1c40f';
+            const centralPosLeft = centerX - (lambda / b) * scale;
+            const centralPosRight = centerX + (lambda / b) * scale;
+            DW_CTX.fillRect(centralPosLeft, centerY + 60, centralPosRight - centralPosLeft, 30);
+
+            // Minima and maxima
+            DW_CTX.fillStyle = '#2c3e50';
+            DW_CTX.font = '10px Arial';
+
+            minima.forEach(min => {
+                // Draw minimum mark
+                DW_CTX.beginPath();
+                DW_CTX.arc(min.pos, centerY + 50, 4, 0, Math.PI * 2);
+                DW_CTX.fillStyle = '#e74c3c';
+                DW_CTX.fill();
+
+                DW_CTX.fillStyle = '#2c3e50';
+                DW_CTX.fillText('min m=' + min.m, min.pos - 20, centerY + 65);
+                DW_CTX.fillStyle = '#e74c3c';
+            });
+
+            // Draw first order maxima (approximate)
+            if (lambda / b < 1) {
+                const firstMinTheta = Math.asin(lambda / b);
+                const firstMaxTheta = Math.asin(1.5 * lambda / b); // approximate
+                const firstMaxPos = centerX + firstMaxTheta * scale;
+                DW_CTX.fillStyle = '#27ae60';
+                DW_CTX.beginPath();
+                DW_CTX.arc(firstMaxPos, centerY + 50, 4, 0, Math.PI * 2);
+                DW_CTX.fill();
+                DW_CTX.fillStyle = '#2c3e50';
+                DW_CTX.fillText('1st max', firstMaxPos - 20, centerY + 65);
+            }
+
+            // Wavelength display
+            DW_CTX.fillStyle = '#555';
+            DW_CTX.font = '11px Arial';
+            DW_CTX.fillText('λ = ' + lambda * 1e9 + ' nm', 10, 20);
+            DW_CTX.fillText('b = ' + b * 1e6 + ' µm', 10, 35);
+        }
+
+        // Event listeners for diffraction controls
+        document.getElementById('wavelength').addEventListener('input', (e) => {
+            document.getElementById('wavelength-value').textContent = e.target.value + ' nm';
+            drawDiffraction();
+        });
+
+        document.getElementById('slit-width').addEventListener('input', (e) => {
+            document.getElementById('slit-value').textContent = e.target.value + ' µm';
+            drawDiffraction();
+        });
+
+        document.getElementById('screen-dist').addEventListener('input', (e) => {
+            document.getElementById('screen-value').textContent = e.target.value + ' m';
+            drawDiffraction();
+        });
+
+        // ============================================
+        // DIFFRACTION GRATING CANVAS
+        // ============================================
+        const GW_CANVAS = document.getElementById('grating-canvas');
+        const GW_CTX = GW_CANVAS.getContext('2d');
+        let GW_Width, GW_Height;
+
+        function resizeGWCanvas() {
+            GW_Width = GW_CANVAS.parentNode.clientWidth;
+            GW_Height = GW_CANVAS.parentNode.clientHeight || 400;
+            GW_CANVAS.width = GW_Width * 2;
+            GW_CANVAS.height = GW_Height * 2;
+            GW_CANVAS.style.width = GW_Width + 'px';
+            GW_CANVAS.style.height = GW_Height + 'px';
+            GW_CTX.scale(2, 2);
+            drawGrating();
+        }
+
+        window.addEventListener('resize', resizeGWCanvas);
+        resizeGWCanvas();
+
+        function drawGrating() {
+            GW_CTX.clearRect(0, 0, GW_Width, GW_Height);
+
+            const d = 1 / (parseInt(document.getElementById('grating-density').value) * 1000); // meters
+            const lambda = parseFloat(document.getElementById('light-wavelength').value) * 1e-9; // m
+            const n = parseInt(document.getElementById('order').value);
+
+            const sinTheta = n * lambda / d;
+            const theta = Math.asin(Math.min(1, Math.max(-1, sinTheta)));
+            const thetaDeg = theta * 180 / Math.PI;
+
+            document.getElementById('order-value').textContent = n + 'st';
+
+            const centerX = GW_Width / 2;
+            const centerY = GW_Height / 2;
+            const scale = GW_Width / 5;
+
+            // Draw grating
+            GW_CTX.fillStyle = '#2c3e50';
+            const gratingWidth = 200;
+            const numSlits = parseInt(document.getElementById('grating-density').value);
+            const slitWidth = (d * numSlits * 1000 - slitGap) / numSlits;
+
+            // Simple grating representation
+            GW_CTX.fillRect(centerX - gratingWidth / 2, centerY - 20, gratingWidth, 40);
+
+            // Draw slits (simplified)
+            GW_CTX.fillStyle = '#fff';
+            const slitGap = (d * 1000) / numSlits;
+            for (let i = 0; i < 8; i++) {
+                const x = centerX - gratingWidth / 2 + (i * slitGap) + 5;
+                GW_CTX.fillRect(x, centerY - 10, 8, 20);
+            }
+
+            // Draw angle arcs and positions
+            GW_CTX.strokeStyle = '#3498db';
+            GW_CTX.lineWidth = 2;
+
+            // Draw central maximum
+            GW_CTX.fillStyle = '#f1c40f';
+            GW_CTX.beginPath();
+            GW_CTX.arc(centerX, centerY, 15, 0, Math.PI * 2);
+            GW_CTX.fill();
+
+            // Draw order positions
+            const orders = [-2, -1, 0, 1, 2];
+            GW_CTX.fillStyle = '#2c3e50';
+            GW_CTX.font = '10px Arial';
+
+            orders.forEach(order => {
+                if (order === 0) return;
+
+                const sinThetaN = order * lambda / d;
+                if (Math.abs(sinThetaN) <= 1) {
+                    const thetaN = Math.asin(sinThetaN);
+                    const posX = centerX + thetaN * scale * order;
+
+                    // Draw tick mark
+                    GW_CTX.beginPath();
+                    GW_CTX.moveTo(posX, centerY - 30);
+                    GW_CTX.lineTo(posX, centerY + 30);
+                    GW_CTX.strokeStyle = '#3498db';
+                    GW_CTX.lineWidth = 1;
+
+                    // Label
+                    GW_CTX.fillText('n=' + order, posX - 15, centerY - 10);
+
+                    // Draw arrow from center
+                    GW_CTX.beginPath();
+                    GW_CTX.moveTo(centerX, centerY);
+                    GW_CTX.lineTo(posX, centerY);
+                    GW_CTX.stroke();
+                }
+            });
+
+            // Wavelength info
+            GW_CTX.fillStyle = '#555';
+            GW_CTX.font = '11px Arial';
+            GW_CTX.fillText('λ = ' + lambda * 1e9 + ' nm', 10, 20);
+            GW_CTX.fillText('d = ' + d * 1e6 + ' µm (d = 1/' + document.getElementById('grating-density').value + ' lines/mm)', 10, 35);
+
+            // Check if visible
+            const maxOrder = Math.floor(d / lambda);
+            if (Math.abs(n) <= maxOrder) {
+                GW_CTX.fillStyle = '#27ae60';
+                GW_CTX.fillText('Order ' + n + ' is visible', centerX - 50, centerY + 50);
+            } else {
+                GW_CTX.fillStyle = '#e74c3c';
+                GW_CTX.fillText('Order ' + n + ' exceeds maximum', centerX - 60, centerY + 50);
+                GW_CTX.fillText('Max order: ' + maxOrder, centerX - 50, centerY + 65);
+            }
+        }
+
+        // Event listeners for grating controls
+        document.getElementById('grating-density').addEventListener('input', (e) => {
+            document.getElementById('grating-value').textContent = e.target.value + ' lines/mm';
+            document.getElementById('order').max = Math.max(1, Math.floor((1 / (e.target.value * 1000 * 1e-9)) / (parseFloat(document.getElementById('light-wavelength').value) * 1e-9)));
+            document.getElementById('order-value').textContent = '1st';
+            drawGrating();
+        });
+
+        document.getElementById('light-wavelength').addEventListener('input', (e) => {
+            document.getElementById('light-value').textContent = e.target.value + ' nm';
+            document.getElementById('order').max = Math.max(1, Math.floor((1 / (parseInt(document.getElementById('grating-density').value) * 1000 * e.target.value * 1e-9))));
+            document.getElementById('order-value').textContent = '1st';
+            drawGrating();
+        });
+
+        document.getElementById('order').addEventListener('input', (e) => {
+            document.getElementById('order-value').textContent = e.target.value + 'st';
+            drawGrating();
+        });
+
+        // ============================================
+        // PRACTICE PROBLEMS
+        // ============================================
+        const problemsSW = [
+            {
+                q: 'Q1: A string of length 1.2 m is fixed at both ends. If the wave speed is 240 m/s, find the frequency of the first harmonic.',
+                answer: 'Answer: λ₁ = 2L = 2.4 m, f₁ = v/λ₁ = 240/2.4 = 100 Hz',
+                show: false
+            },
+            {
+                q: 'Q2: A pipe open at both ends has a length of 0.8 m. Find the frequency of the second harmonic. (v = 340 m/s)',
+                answer: 'Answer: λ₂ = L = 0.8 m, f₂ = 2v/(2L) = 340/0.8 = 425 Hz',
+                show: false
+            },
+            {
+                q: 'Q3: A standing wave on a string fixed at both ends has a wavelength of 0.6 m. What is the length of the string?',
+                answer: 'Answer: For fundamental, L = λ/2 = 0.3 m',
+                show: false
+            },
+            {
+                q: 'Q4: A pipe closed at one end has a fundamental frequency of 256 Hz. If v = 340 m/s, find the length of the pipe.',
+                answer: 'Answer: L = v/(4f) = 340/(4×256) = 0.332 m',
+                show: false
+            },
+            {
+                q: 'Q5: What is the frequency of the third harmonic of a string 0.5 m long with wave speed 300 m/s?',
+                answer: 'Answer: f₃ = 3v/(2L) = 3×300/(2×0.5) = 900 Hz',
+                show: false
+            },
+            {
+                q: 'Q6: A pipe closed at one end resonates at lengths 0.26 m and 0.78 m with the same tuning fork. Find the frequency of the fork. (v = 340 m/s)',
+                answer: 'Answer: ΔL = 0.52 m = 2L₃ - 2L₁ = 4L/3... f = v/(4ΔL) = 340/(4×0.52×1/3)... ≈ 306 Hz',
+                show: false
+            }
+        ];
+
+        const problemsWP = [
+            {
+                q: 'Q1: Light of wavelength 500 nm passes through a single slit of width 0.10 mm. Find the angle of the first minimum.',
+                answer: 'Answer: sin θ = λ/b = 500×10⁻⁹/0.10×10⁻³ = 0.005, θ = 0.29°',
+                show: false
+            },
+            {
+                q: 'Q2: A diffraction grating has 500 lines/mm. At what angle will the first-order maximum appear for light of wavelength 600 nm?',
+                answer: 'Answer: d = 1/500mm = 2×10⁻⁶ m, sin θ = λ/d = 600×10⁻⁹/2×10⁻⁶ = 0.3, θ = 17.5°',
+                show: false
+            },
+            {
+                q: 'Q3: If the first minimum in a single-slit diffraction pattern is at 15°, and the slit width is 0.20 µm, what is the wavelength?',
+                answer: 'Answer: λ = b sin θ = 0.20×10⁻⁶ × sin(15°) = 51.8×10⁻⁹ m = 51.8 nm',
+                show: false
+            }
+        ];
+
+        function renderProblems(id, problems) {
+            const container = document.getElementById(id);
+            container.innerHTML = '';
+            problems.forEach((prob, i) => {
+                const div = document.createElement('div');
+                div.className = 'problem';
+                div.innerHTML = '<h4>' + prob.q + '</h4>' +
+                    '<p><strong>Solution:</strong> ' + prob.answer + '</p>' +
+                    '<button class="small-btn" onclick="toggleAnswer(' + i + ')">Show Answer</button>';
+                container.appendChild(div);
+            });
+        }
+
+        function toggleAnswer(index) {
+            // Simple toggle implementation
+            const answers = document.querySelectorAll('.answer');
+            answers.forEach((a, i) => {
+                if (i === index) a.classList.toggle('show');
+            });
+        }
+
+        // Initialize
+        renderProblems('practice-sw', problemsSW.slice(0, 3));
+        renderProblems('practice-wp', problemsWP.slice(0, 3));
+
+        // ============================================
+        // SMOOTH SCROLLING & ANIMATIONS
+        // ============================================
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+                }
+            });
+        });
+
+        // Reduced motion preference
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            document.querySelectorAll('.slider').forEach(slider => {
+                slider.disabled = true;
+            });
+        }
+    </script>
+</body>
+</html>

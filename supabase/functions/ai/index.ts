@@ -47,7 +47,7 @@ const NIM_MODELS = [
     "nvidia/nemotron-4-340b-instruct",
     "mistralai/mistral-large-4-1t-a52b",
     "deepseek-ai/deepseek-v4.1-flash",
-  ].join(",")),
+  ].join(",")).split(","),
 ].map((s) => s.trim()).filter(Boolean);
 
 const CALL_TIMEOUT_MS = 25_000;
