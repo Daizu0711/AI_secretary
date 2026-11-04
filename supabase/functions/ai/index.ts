@@ -114,10 +114,22 @@ function safeJson(s: string): Record<string, unknown> {
 
 async function callGemini(messages: Msg[]): Promise<ProviderResult> {
   const sys = messages.find((m) => m.role === "system")?.content ?? SYSTEM_PROMPT;
-  const contents = messages.filter((m) => m.role !== "system").map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
+  const contents = [];
+  for (const m of messages.filter((x) => x.role !== "system")) {
+    if (m.role === "tool") {
+      // ツール結果 → functionResponse
+      contents.push({ role: "user", parts: [{ functionResponse: { name: m.name, response: { result: (m.content || "").slice(0, 4000) } } }] });
+    } else if (m.role === "assistant") {
+      const parts: unknown[] = [];
+      if (m.content) parts.push({ text: m.content });
+      for (const c of (m.tool_calls as ToolCall[] | undefined) ?? []) {
+        parts.push({ functionCall: { name: c.name, args: c.args } });
+      }
+      contents.push({ role: "model", parts });
+    } else {
+      contents.push({ role: "user", parts: [{ text: m.content }] });
+    }
+  }
   const r = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {

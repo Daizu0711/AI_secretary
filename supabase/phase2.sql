@@ -70,6 +70,50 @@ alter table public.managebac_tasks add column if not exists detail text;
 alter table public.managebac_tasks add column if not exists detail_title text;
 alter table public.managebac_tasks add column if not exists detail_fetched_at timestamptz;
 
+-- ---------- RLS 修復: 「DBにはあるのにアプリで見えない」対策 ----------
+-- 1) user_id の自動補完(アプリは insert 時に user_id を送らないため必須)
+alter table public.sec_items            alter column user_id set default auth.uid();
+alter table public.sec_memory           alter column user_id set default auth.uid();
+alter table public.sec_hermes_jobs      alter column user_id set default auth.uid();
+alter table public.sec_push_subscriptions alter column user_id set default auth.uid();
+
+-- 2) user_id が NULL の既存行を、単一ユーザー運用(新規登録OFF)前提で唯一のアカウントに紐付け
+do $$
+declare
+  only_user uuid;
+begin
+  select id into only_user from auth.users order by created_at limit 1;
+  if (select count(*) from auth.users) = 1 and only_user is not null then
+    update public.sec_items            set user_id = only_user where user_id is null;
+    update public.sec_memory           set user_id = only_user where user_id is null;
+    update public.sec_hermes_jobs      set user_id = only_user where user_id is null;
+    update public.sec_push_subscriptions set user_id = only_user where user_id is null;
+  end if;
+end $$;
+
+-- 3) ポリシーの再作成(既存環境で未作成/食い違いがあっても確実に張る)
+drop policy if exists sec_items_own on public.sec_items;
+create policy sec_items_own on public.sec_items
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists sec_memory_own on public.sec_memory;
+create policy sec_memory_own on public.sec_memory
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists sec_ai_log_own on public.sec_ai_log;
+create policy sec_ai_log_own on public.sec_ai_log
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists sec_hermes_jobs_own on public.sec_hermes_jobs;
+create policy sec_hermes_jobs_own on public.sec_hermes_jobs
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists sec_push_subscriptions_own on public.sec_push_subscriptions;
+create policy sec_push_subscriptions_own on public.sec_push_subscriptions
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists managebac_tasks_all on public.managebac_tasks;
+create policy managebac_tasks_all on public.managebac_tasks
+  for all to authenticated using (true) with check (true);
+drop policy if exists managebac_import_log_all on public.managebac_import_log;
+create policy managebac_import_log_all on public.managebac_import_log
+  for all to authenticated using (true) with check (true);
+
 -- ---------- sec_memory: content → text ----------
 do $$
 begin
