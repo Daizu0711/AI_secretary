@@ -6,7 +6,8 @@
 
 | パス | 内容 |
 |---|---|
-| `app/` | PWAフロントエンド(単一HTML。GitHub Pagesで公開) |
+| `app/` | PWAフロントエンド(単一HTML。GitHub Pagesで自動デプロイ) |
+| `.github/workflows/pages.yml` | `app/` をGitHub Pagesへデプロイ(`index_1.html`→トップページ) |
 | `supabase/schema.sql` | `sec_*` テーブル + 共有 `managebac_*` テーブルのスキーマ(RLS付き)。SQL Editorで実行 |
 | `supabase/functions/ai/` | AIルーター Edge Function。Gemini → NIM → Hermes(チャット/計画)、NIM → Gemini(課題ヒント)。承認制propose_*ツール + `sec_ai_log` 記録付き |
 | `managebac auto/` | ManageBac 非公式スクレイパー + Supabase同期 |
@@ -14,8 +15,11 @@
 
 ## セットアップ
 
-1. Supabase プロジェクトを作成し、`supabase/schema.sql` を SQL Editor で実行
+1. Supabase プロジェクトを作成し、`supabase/schema.sql` → `supabase/phase2.sql` の順に SQL Editor で実行
+   (既存DBがある場合も phase2.sql は冪等なので安全に再実行できる)
 2. 自分のアカウントを作成したら **新規登録をOFF** にする(仕様書 §3)
+3. PWAをデプロイ: リポジトリの Settings → Pages → Source を **GitHub Actions** にする。
+   以降 `main` への `app/` 変更pushで自動デプロイされる(手動はActionsの pages → Run workflow)
 3. ManageBac 同期用に `.env` を作成(`.env.example` をコピー)してローカルで確認:
    ```
    cd "managebac auto"
@@ -31,9 +35,15 @@
    supabase secrets set GEMINI_API_KEY=... NIM_API_KEY=...   # NIMはNVIDIA_API_KEYでも可
    # 任意: GEMINI_MODEL / NIM_BASE / NIM_MODEL
    ```
-   フロントからは `POST {SUPABASE_URL}/functions/v1/ai` にユーザーJWT付きで
-   `{purpose, messages:[{role,content}]}` を送ると `{ok, provider, reply, proposals[]}` が返る。
-   `proposals` は承認カード。適用はアプリ側がユーザー権限(PostgREST/RLS)で行う。
+   フロント(app/index_1.html)の `askServer()` が使う契約:
+   リクエスト `{message, history:[{role,content}], tz, now, purpose?}` →
+   レスポンス `{text, provider, tried:[{provider,ok}], proposals:[{tool,args}]}` または `{error}`。
+   `proposals[].tool` は `propose_add_task / propose_add_note / propose_update_item /
+   propose_complete_task / propose_delete_item / propose_memory` のいずれかで、
+   `args` はフロントの `applyProposal()` がそのまま消費する形。適用はユーザー承認後に
+   アプリ側がユーザー権限(PostgREST/RLS)で行う。
+4. フロントの設定は `app/index_1.html` 冒頭の `SUPABASE_URL` / `SUPABASE_KEY` の2行だけ
+   (URLは設定済み、KEYは Settings → API の anon public key)
 5. `managebac-sync` ワークフローが3時間おきに走る。失敗時は `managebac_import_log`
    に `ok=false` が記録され、アプリ側は「最終更新◯時間前」を表示する(仕様書 §6)
 

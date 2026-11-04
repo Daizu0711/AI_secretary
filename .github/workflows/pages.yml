@@ -1,0 +1,45 @@
+# GitHub Pages へのデプロイ — app/ を静的サイトとして公開する。
+# 使い方: リポジトリの Settings → Pages → Build and deployment → Source を
+#        "GitHub Actions" に設定する(初回のみ)。
+# main への push(app/ 変更時)で自動デプロイ。手動実行も可。
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**"]
+  workflow_dispatch:
+
+permissions:
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build site (index_1.html をトップページの index.html にする)
+        run: |
+          mkdir -p site
+          cp app/* site/
+          cp app/index_1.html site/index.html
+          touch site/.nojekyll
+          ls -la site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

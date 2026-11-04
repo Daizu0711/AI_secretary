@@ -5,19 +5,20 @@
 -- create table if not exists で既存定義を壊さない。
 -- ============================================================================
 
--- ---------- sec_items: タスク/メモ ----------
+-- ---------- sec_items: タスク/メモ (列名は app/index_1.html の実装に合わせる) ----------
 create table if not exists public.sec_items (
   id              uuid primary key default gen_random_uuid(),
   user_id         uuid not null references auth.users(id) on delete cascade,
-  kind            text not null check (kind in ('task','memo')),
+  kind            text not null check (kind in ('task','note')),
   title           text not null,
   body            text default '',
   due             timestamptz,                 -- 期限
   category        text default '',
-  estimate_min    integer,                       -- 見積り(分)
-  actual_min      integer,                       -- 実績(分) ※見積り学習用
+  est_minutes     integer,                       -- 見積り(分)
+  actual_min      integer,                       -- 実績(分) ※見積り学習用(§4.7)
   done            boolean not null default false,
-  hide_from_ai    boolean not null default false, -- 「AIに見せない」
+  done_at         timestamptz,                   -- 完了時刻
+  ai_hidden       boolean not null default false, -- 「AIに見せない」
   priority        integer default 0,             -- 自動計画で使う重み
   scheduled_start timestamptz,                   -- 自動計画で置かれた開始
   scheduled_end   timestamptz,                   -- 自動計画で置かれた終了
@@ -33,7 +34,7 @@ create index if not exists sec_items_done_idx       on public.sec_items (user_id
 create table if not exists public.sec_memory (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users(id) on delete cascade,
-  content    text not null,
+  text       text not null,
   created_at timestamptz not null default now()
 );
 
