@@ -954,15 +954,11 @@ async function submitLock() {
   if (authFlow || $box.classList.contains("busy")) return;
   const value = $field.value;
 
-  // 未設定の間だけのプレビュー(実認証は行わない)
+  // 未設定の間は一切アンロックしない。
+  // パスワードは常に Supabase Auth のユーザーパスワードと一致している必要がある
+  // (signInWithPassword が不一致を弾くので、ここで別解除は行わない)
   if (!CONFIGURED) {
-    if (!value.trim()) { errorHint("ENTER ACCESS CODE"); return; }
-    authFlow = true;
-    $lock.classList.add("working");
-    $box.classList.add("busy");
-    $hint.textContent = "";
-    await wait(450);
-    await grant();
+    errorHint("SUPABASE NOT CONFIGURED — set SUPABASE_KEY first");
     return;
   }
 
