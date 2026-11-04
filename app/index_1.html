@@ -1428,7 +1428,7 @@ function renderSettings() {
     if (e.target.checked) autoPlan({ manual: true });
     else toast("自動割り当てをオフにしました");
   };
-  $("#voiceTest").onclick = () => speak("こんにちは。秘書です。今日の予定を確認しましょう。");
+  $("#voiceTest").onclick = () => speak("こんにちは。イージスです。今日の予定を確認しましょう。");
   $("#refresh").onclick = async () => {
     await loadAll();
     renderSettings();
