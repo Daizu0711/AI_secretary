@@ -37,14 +37,18 @@
 5. AIルーター Edge Function をデプロイし、Secretsを設定:
    ```
    supabase secrets set GEMINI_API_KEY=... NIM_API_KEY=...   # NIMはNVIDIA_API_KEYでも可
-   supabase functions deploy ai        # ← Secrets変更後は必ず再デプロイ
+   # --no-verify-jwt: GET診断とgcalのOAuthコールバック(ブラウザ遷移でヘッダーが付かない)を通すため。
+   # POSTは関数内で auth.getUser() によりユーザーJWTを検証するので実質同じ強度。
+   supabase functions deploy ai --no-verify-jwt   # ← Secrets変更後は必ず再デプロイ
+   supabase functions deploy gcal --no-verify-jwt
    supabase secrets list               # 設定確認
    ```
    **503 (Service Unavailable) が出る場合**はほぼ Secrets未設定 or 再デプロイ忘れ。
    Dashboard → Edge Functions → ai → Logs で実際のエラーを確認できる。
    ヘルス確認: `curl https://<ref>.supabase.co/functions/v1/ai` (anon key不要のGET) で
    `{providers:{gemini:bool, nim:bool}, models:{...}}` が返る。
-   実際に使えるモデル一覧: `curl "https://<ref>.supabase.co/functions/v1/ai?action=models"`
+   実際に使えるモデル一覧(anon keyヘッダー付き):
+   `curl -H "apikey: <anon key>" -H "Authorization: Bearer <anon key>" "https://<ref>.supabase.co/functions/v1/ai?action=models"`
    (gemini_live / nim_live にプロバイダ側の最新一覧が返る)
 
    **モデル名について(2026-11時点)**: Geminiの `gemini-2.x` は退役済みで 404 になる。
@@ -57,7 +61,7 @@
    - Google Cloud Console で OAuth クライアント(ID/シークレット)を作成し、
      承認済みリダイレクトURIに `https://<ref>.supabase.co/functions/v1/gcal?action=callback` を登録
    - `supabase secrets set GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...`
-   - `supabase functions deploy gcal`
+   - `supabase functions deploy gcal --no-verify-jwt` (OAuthコールバックがヘッダー無しGETのため)
    - `supabase/schema.sql` → `phase2.sql` を再実行 (sec_gcal / gcal_event_id 列)
    - アプリの設定画面 → Googleカレンダー →「連携する」→ 同意 →「同期」
    - `sec_gcal` はクライアントから不可視(RLSで拒否、状態は `sec_gcal_status` ビューのみ)
