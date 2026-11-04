@@ -43,7 +43,16 @@
    **503 (Service Unavailable) が出る場合**はほぼ Secrets未設定 or 再デプロイ忘れ。
    Dashboard → Edge Functions → ai → Logs で実際のエラーを確認できる。
    ヘルス確認: `curl https://<ref>.supabase.co/functions/v1/ai` (anon key不要のGET) で
-   `{providers:{gemini:bool, nim:bool}}` が返る。
+   `{providers:{gemini:bool, nim:bool}, models:{...}}` が返る。
+   実際に使えるモデル一覧: `curl "https://<ref>.supabase.co/functions/v1/ai?action=models"`
+   (gemini_live / nim_live にプロバイダ側の最新一覧が返る)
+
+   **モデル名について(2026-11時点)**: Geminiの `gemini-2.x` は退役済みで 404 になる。
+   既定は `gemini-flash-latest,gemini-pro-latest`(latestエイリアスなので常に現行を指す)で、
+   404/退役を検知したら自動で次の候補モデルにフォールバックする。
+   NIMは `integrate.api.nvidia.com/v1/models` で現存確認済みの候補から順に試す。
+   個別指定は Secrets で上書き可: `GEMINI_MODEL` / `GEMINI_MODELS`(カンマ区切り) /
+   `NIM_MODEL` / `NIM_MODELS`(カンマ区切り)。
 6. Googleカレンダー連携 (アプリ→カレンダーへの書き込み):
    - Google Cloud Console で OAuth クライアント(ID/シークレット)を作成し、
      承認済みリダイレクトURIに `https://<ref>.supabase.co/functions/v1/gcal?action=callback` を登録

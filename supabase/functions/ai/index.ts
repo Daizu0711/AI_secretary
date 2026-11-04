@@ -29,10 +29,26 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.0-flash";
+// モデルは候補リストで持ち、404/退役なら次の候補へフォールバックする。
+// 2026年時点で gemini-2.x は退役しているため latest エイリアスを既定にする。
+// GEMINI_MODEL を設定した場合は先頭になる。GEMINI_MODELS でカンマ区切りに候補追加可。
+const GEMINI_MODELS = [
+  ...(Deno.env.get("GEMINI_MODEL") ? [Deno.env.get("GEMINI_MODEL")!] : []),
+  ...(Deno.env.get("GEMINI_MODELS") ?? "gemini-flash-latest,gemini-pro-latest").split(","),
+].map((s) => s.trim()).filter(Boolean);
 const NIM_API_KEY = Deno.env.get("NIM_API_KEY") ?? Deno.env.get("NVIDIA_API_KEY") ?? "";
 const NIM_BASE = (Deno.env.get("NIM_BASE") ?? "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
-const NIM_MODEL = Deno.env.get("NIM_MODEL") ?? "nvidia/llama-3.1-nemotron-70b-instruct";
+// integrate.api.nvidia.com/v1/models で現存確認済みの候補
+// (NIM_MODEL を設定した場合は先頭。NIM_MODELS でカンマ区切りに追加可)
+const NIM_MODELS = [
+  ...(Deno.env.get("NIM_MODEL") ? [Deno.env.get("NIM_MODEL")!] : []),
+  ...(Deno.env.get("NIM_MODELS") ?? [
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "nvidia/nemotron-4-340b-instruct",
+    "mistralai/mistral-large-4-1t-a52b",
+    "deepseek-ai/deepseek-v4.1-flash",
+  ].join(",")),
+].map((s) => s.trim()).filter(Boolean);
 
 const CALL_TIMEOUT_MS = 25_000;
 const MAX_ROUNDS = 6;
@@ -117,7 +133,13 @@ function safeJson(s: string): Record<string, unknown> {
   try { return JSON.parse(s); } catch { return {}; }
 }
 
-async function callGemini(messages: Msg[]): Promise<ProviderResult> {
+// モデルが存在しない系のエラー(404やメッセージ中の not found)を検出して次候補へ回す
+function isModelDead(code: number | undefined, msg: string): boolean {
+  if (code === 404) return true;
+  return /not found|does not exist|is not found|unknown model|invalid model|model.*(not|no longer)|retired/i.test(msg);
+}
+
+async function callGemini(messages: Msg[], model: string): Promise<ProviderResult> {
   const sys = messages.find((m) => m.role === "system")?.content ?? SYSTEM_PROMPT;
   const contents = [];
   for (const m of messages.filter((x) => x.role !== "system")) {
@@ -136,7 +158,7 @@ async function callGemini(messages: Msg[]): Promise<ProviderResult> {
     }
   }
   const r = await fetchWithTimeout(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -149,7 +171,10 @@ async function callGemini(messages: Msg[]): Promise<ProviderResult> {
       }),
     });
   if (r.status === 429) throw Object.assign(new Error("gemini 429"), { code: 429 });
-  if (!r.ok) throw Object.assign(new Error(`gemini ${r.status}: ${(await r.text()).slice(0, 300)}`), { code: r.status });
+  if (!r.ok) {
+    const body = (await r.text()).slice(0, 300);
+    throw Object.assign(new Error(`gemini ${r.status} [${model}]: ${body}`), { code: r.status, modelDead: isModelDead(r.status, body) });
+  }
   const j = await r.json();
   const c = j.candidates?.[0]?.content ?? {};
   const text = (c.parts ?? []).filter((p: { text?: string }) => p.text).map((p: { text: string }) => p.text).join("\n");
@@ -161,19 +186,22 @@ async function callGemini(messages: Msg[]): Promise<ProviderResult> {
   return { text, toolCalls };
 }
 
-async function callNIM(messages: Msg[]): Promise<ProviderResult> {
+async function callNIM(messages: Msg[], model: string): Promise<ProviderResult> {
   const r = await fetchWithTimeout(`${NIM_BASE}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${NIM_API_KEY}` },
     body: JSON.stringify({
-      model: NIM_MODEL,
+      model,
       messages,
       tools: TOOLS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: toolParams()[t.name] } })),
       tool_choice: "auto",
     }),
   });
   if (r.status === 429) throw Object.assign(new Error("nim 429"), { code: 429 });
-  if (!r.ok) throw Object.assign(new Error(`nim ${r.status}: ${(await r.text()).slice(0, 300)}`), { code: r.status });
+  if (!r.ok) {
+    const body = (await r.text()).slice(0, 300);
+    throw Object.assign(new Error(`nim ${r.status} [${model}]: ${body}`), { code: r.status, modelDead: isModelDead(r.status, body) });
+  }
   const j = await r.json();
   const m = j.choices?.[0]?.message ?? {};
   const toolCalls: ToolCall[] = (m.tool_calls ?? []).map((c: { id: string; function: { name: string; arguments: string } }) => ({
@@ -244,9 +272,26 @@ async function runTool(sb: ReturnType<typeof serviceClient>, userId: string, cal
 }
 
 // ---------- ルーター ----------
-async function callProvider(p: string, messages: Msg[], userId: string, purpose: string): Promise<ProviderResult | null> {
-  if (p === "gemini" && GEMINI_API_KEY) return await callGemini(messages);
-  if (p === "nim" && NIM_API_KEY) return await callNIM(messages);
+// モデル候補を順に試し、404/退役なら次のモデルへ。全滅したら次の提供元へ。
+async function callWithModels(p: "gemini" | "nim", models: string[], messages: Msg[], tried: Tried[]): Promise<ProviderResult | null> {
+  for (const model of models) {
+    try {
+      const r = p === "gemini" ? await callGemini(messages, model) : await callNIM(messages, model);
+      tried.push({ provider: `${p}:${model}`, ok: true });
+      return r;
+    } catch (e) {
+      const modelDead = Boolean((e as { modelDead?: boolean }).modelDead);
+      tried.push({ provider: `${p}:${model}`, ok: false });
+      if (modelDead) continue; // 次のモデル候補へ
+      throw e; // 429/タイムアウトなどは提供元の再試行へ
+    }
+  }
+  return null;
+}
+
+async function callProvider(p: string, messages: Msg[], userId: string, purpose: string, tried: Tried[]): Promise<ProviderResult | null> {
+  if (p === "gemini" && GEMINI_API_KEY) return await callWithModels("gemini", GEMINI_MODELS, messages, tried);
+  if (p === "nim" && NIM_API_KEY) return await callWithModels("nim", NIM_MODELS, messages, tried);
   if (p === "hermes") {
     const lastUser = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n\n");
     return await callHermes(userId, purpose, lastUser);
@@ -260,9 +305,9 @@ async function route(purpose: string, messages: Msg[], userId: string, tried: Tr
     if (inCooldown(p)) { tried.push({ provider: p, ok: false }); continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await callProvider(p, messages, userId, purpose);
-        if (r) { tried.push({ provider: p, ok: true }); return { provider: p, result: r }; }
-        break; // キー未設定/Hermesオフライン → 次へ
+        const r = await callProvider(p, messages, userId, purpose, tried);
+        if (r) return { provider: p, result: r };
+        break; // キー未設定/全モデル退役/Hermesオフライン → 次へ
       } catch (e) {
         const code = (e as { code?: number }).code;
         tried.push({ provider: p, ok: false });
@@ -282,7 +327,21 @@ async function route(purpose: string, messages: Msg[], userId: string, tried: Tr
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
   if (req.method === "GET") {
-    return Response.json({ ok: true, providers: { gemini: !!GEMINI_API_KEY, nim: !!NIM_API_KEY } }, { headers: cors });
+    const u = new URL(req.url);
+    // 診断: 実際に使えるモデル一覧をプロバイダから取得 (キーがあれば)
+    if (u.searchParams.get("action") === "models") {
+      const out: Record<string, unknown> = { candidates: { gemini: GEMINI_MODELS, nim: NIM_MODELS } };
+      try {
+        const r = await fetch(`${NIM_BASE}/models`, { headers: { Authorization: `Bearer ${NIM_API_KEY}` } });
+        if (r.ok) out.nim_live = (await r.json()).data.map((m: { id: string }) => m.id);
+      } catch { /* 無視 */ }
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}&pageSize=200`);
+        if (r.ok) out.gemini_live = (await r.json()).models.map((m: { name: string }) => m.name.replace("models/", ""));
+      } catch { /* 無視 */ }
+      return Response.json(out, { headers: cors });
+    }
+    return Response.json({ ok: true, providers: { gemini: !!GEMINI_API_KEY, nim: !!NIM_API_KEY }, models: { gemini: GEMINI_MODELS, nim: NIM_MODELS } }, { headers: cors });
   }
 
   const tried: Tried[] = [];
