@@ -1,0 +1,46 @@
+# ManageBac 取り込み — 数時間おきにスクレイプして Supabase へ同期する。
+# リポジトリは private 前提。認証情報はすべて Secrets から注入する。
+name: managebac-sync
+
+on:
+  schedule:
+    # 毎3時間 (JST 9:00/12:00/15:00/18:00/21:00/0:00/3:00/6:00 に相当するUTC)
+    - cron: "0 */3 * * *"
+  workflow_dispatch: # 手動実行
+
+permissions:
+  contents: none
+
+concurrency:
+  group: managebac-sync
+  cancel-in-progress: false # 取り込みは並行させない(レート制限対策)
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml
+
+      - name: Run ManageBac -> Supabase sync
+        env:
+          MB_BASE_URL: ${{ secrets.MB_BASE_URL }}
+          MB_EMAIL: ${{ secrets.MB_EMAIL }}
+          MB_PASSWORD: ${{ secrets.MB_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # サービスロールキーを使わない場合の代替:
+          # SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # SB_EMAIL: ${{ secrets.SB_EMAIL }}
+          # SB_PASSWORD: ${{ secrets.SB_PASSWORD }}
+        run: |
+          python "managebac auto/sync_to_supabase.py" --json
