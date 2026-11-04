@@ -275,8 +275,11 @@ class ManageBac:
                 title = _norm(h.get_text(" ", strip=True))
                 break
 
+        # 説明文は div.show-more.in が本体。見つからなければ他セレクタにフォールバック。
+        # (Supabase 側の列名は detail のまま。取得ソースが description なだけ)
         detail = None
-        for sel in ('[class*="description"]', '[class*="instruction"]', '[class*="content"]', "article", "main"):
+        for sel in ("div.show-more.in", '[class*="show-more"]', '[class*="description"]',
+                    '[class*="instruction"]', "article", "main"):
             el = soup.select_one(sel)
             if not el:
                 continue
