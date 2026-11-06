@@ -97,6 +97,17 @@ drop policy if exists sec_gcal_deny on public.sec_gcal;
 create policy sec_gcal_deny on public.sec_gcal
   for all to authenticated using (false) with check (false);
 
+-- ---------- iCalフィードトークン ----------
+create table if not exists public.sec_ics_tokens (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  token      text not null unique default gen_random_uuid()::text,
+  created_at timestamptz not null default now()
+);
+alter table public.sec_ics_tokens enable row level security;
+drop policy if exists sec_ics_tokens_own on public.sec_ics_tokens;
+create policy sec_ics_tokens_own on public.sec_ics_tokens
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 -- ---------- RLS 修復: 「DBにはあるのにアプリで見えない」対策 ----------
 -- 1) user_id の自動補完(アプリは insert 時に user_id を送らないため必須)
 alter table public.sec_items            alter column user_id set default auth.uid();

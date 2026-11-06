@@ -1403,6 +1403,10 @@ function renderSettings() {
         <div class="addrow" style="margin:0"><button class="btn ghost" id="gcalSync">同期</button><button class="btn" id="gcalConnect">連携する</button><button class="btn ghost" id="gcalDisc">解除</button></div>
       </div>
     </div>
+    <div class="card"><h3>${ico.ai}カレンダー購読(iCalフィード)</h3>
+      <p class="desc">OAuth不要の方式。このURLをGoogleカレンダーの「URLから追加」に登録するとタスク/MB課題が表示されます(反映は数十分〜数時間遅れ)。</p>
+      <div class="addrow"><input class="field" id="icsUrl" readonly placeholder="取得中…"><button class="btn ghost" id="icsCopy">コピー</button><button class="btn ghost" id="icsRotate">再発行</button></div>
+    </div>
     <div class="card"><h3>${ico.wave}音声と計画</h3>
       <label class="toggle"><input type="checkbox" id="optGreet" ${greetOn ? "checked" : ""}> 起動時に声で挨拶する</label>
       <label class="toggle"><input type="checkbox" id="optRead" ${readOn ? "checked" : ""}> 秘書の返答を読み上げる</label>
@@ -1467,6 +1471,30 @@ function renderSettings() {
     catch (e) { toast(e.message, 4000); }
   };
   refreshGcalStatus();
+  // iCalフィードURL
+  (async () => {
+    const el = $("#icsUrl"); if (!el) return;
+    let { data } = await sb.from("sec_ics_tokens").select("token").single();
+    if (!data?.token) {
+      // 未発行なら自動で初回発行
+      const r = await sb.functions.invoke("ics", { body: { action: "rotate" } });
+      if (!r.error) data = { token: r.data.token };
+    }
+    el.value = data?.token ? `${SUPABASE_URL}/functions/v1/ics?token=${data.token}` : "(取得失敗 — 再発行してください)";
+  })();
+  $("#icsCopy").onclick = async () => {
+    const el = $("#icsUrl");
+    try { await navigator.clipboard.writeText(el.value); toast("コピーしました"); }
+    catch { el.select(); document.execCommand("copy"); toast("コピーしました"); }
+  };
+  $("#icsRotate").onclick = async () => {
+    try {
+      const { data, error } = await sb.functions.invoke("ics", { body: { action: "rotate" } });
+      if (error) throw new Error((await error.context.json().catch(() => ({}))).error || error.message);
+      $("#icsUrl").value = `${SUPABASE_URL}/functions/v1/ics?token=${data.token}`;
+      toast("フィードURLを再発行しました(カレンダー側も張り替えてください)", 5000);
+    } catch (e) { toast("再発行に失敗: " + e.message, 4000); }
+  };
   $("#export").onclick = () => {
     const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), items, memory }, null, 2)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "secretary-export.json"; a.click();

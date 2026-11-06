@@ -65,6 +65,13 @@
    - `supabase/schema.sql` → `phase2.sql` を再実行 (sec_gcal / gcal_event_id 列)
    - アプリの設定画面 → Googleカレンダー →「連携する」→ 同意 →「同期」
    - `sec_gcal` はクライアントから不可視(RLSで拒否、状態は `sec_gcal_status` ビューのみ)
+7. カレンダー購読(iCalフィード — OAuth不要、スクレイピング不要):
+   - `supabase functions deploy ics --no-verify-jwt`(GETはトークン認証、POSTはユーザーJWT検証)
+   - `schema.sql` → `phase2.sql` を再実行 (`sec_ics_tokens`)
+   - アプリ設定画面の「カレンダー購読」カードに表示されるURLをコピー
+   - Googleカレンダー → 他のカレンダー横の「+」→「URLから追加」→ URLを貼り付け
+   - 反映はGoogle側の巡回間隔次第で数十分〜数時間遅れる(リアルタイム不要な用途向け。
+     即時に書き込みたい場合は 6. のOAuth版 gcal を併用)
    フロント(app/index_1.html)の `askServer()` が使う契約:
    リクエスト `{message, history:[{role,content}], tz, now, purpose?}` →
    レスポンス `{text, provider, tried:[{provider,ok}], proposals:[{tool,args}]}` または `{error}`。

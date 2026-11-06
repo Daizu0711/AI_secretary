@@ -138,6 +138,13 @@ alter table public.sec_items       add column if not exists gcal_synced_at times
 alter table public.managebac_tasks add column if not exists gcal_event_id text;
 alter table public.managebac_tasks add column if not exists gcal_synced_at timestamptz;
 
+-- ---------- sec_ics_tokens: iCalフィードの閲覧トークン (URLに埋め込むので推測困難な値) ----------
+create table if not exists public.sec_ics_tokens (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  token      text not null unique default gen_random_uuid()::text,
+  created_at timestamptz not null default now()
+);
+
 -- ---------- updated_at 自動更新 ----------
 create or replace function public.sec_touch_updated_at()
 returns trigger language plpgsql as $$
@@ -167,6 +174,7 @@ alter table public.managebac_import_log enable row level security;
 alter table public.sec_hermes_jobs      enable row level security;
 alter table public.sec_push_subscriptions enable row level security;
 alter table public.sec_gcal             enable row level security;
+alter table public.sec_ics_tokens       enable row level security;
 
 -- 自分の行だけ読み書き (仕様書 §3)
 drop policy if exists sec_items_own on public.sec_items;
@@ -205,6 +213,11 @@ create policy sec_push_subscriptions_own on public.sec_push_subscriptions
 drop policy if exists sec_gcal_deny on public.sec_gcal;
 create policy sec_gcal_deny on public.sec_gcal
   for all to authenticated using (false) with check (false);
+
+-- フィードトークンは本人のみ読める(設定画面で自分のフィードURLを表示するため)
+drop policy if exists sec_ics_tokens_own on public.sec_ics_tokens;
+create policy sec_ics_tokens_own on public.sec_ics_tokens
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- ---------- Realtime (アプリの購読用) ----------
 do $$
