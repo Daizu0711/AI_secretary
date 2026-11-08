@@ -50,6 +50,12 @@
       created_at: minsAgo(2600), updated_at: minsAgo(2600),
     },
     {
+      id: "t-old", user_id: "u1", kind: "task", title: "古い化学プリントの解き直し",
+      body: "1ヶ月以上前の期限切れ(非表示テスト用)", due: at(-45, 23, 59), category: "化学",
+      est_minutes: 30, actual_min: null, done: false, done_at: null, ai_hidden: false, priority: 0,
+      scheduled_start: null, scheduled_end: null, created_at: minsAgo(70000), updated_at: minsAgo(70000),
+    },
+    {
       id: "t-eng", user_id: "u1", kind: "task", title: "英語 単語帳 30語",
       body: "", due: todayAt(23, 59), category: "英語", est_minutes: 20, actual_min: 35,
       done: true, done_at: minsAgo(95), ai_hidden: false, priority: 0,

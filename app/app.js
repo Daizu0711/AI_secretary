@@ -22,6 +22,7 @@ const MOTION_KEY = "sec_motion";
 const CAP_KEY = "sec_cap_default";
 const FOCUS_KEY = "sec_focus_default";
 const COLLAPSE_KEY = "sec_collapsed";
+const STALE_KEY = "sec_show_stale";
 
 /* ---------------------------------------------------------------------------
    1. ユーティリティ
@@ -98,6 +99,14 @@ const state = {
   planUndo: null,
 };
 state.chat = (() => { try { const v = JSON.parse(localStorage.getItem(CHAT_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } })();
+
+/* 30日以上前の期限切れ(未完了)は既定で隠す。データは削除しない。 */
+const STALE_DAYS = 30;
+const staleCutoff = () => addDays(startOfDay(), -STALE_DAYS);
+const staleHidden = () => localStorage.getItem(STALE_KEY) !== "1";
+const isStale = i => i.kind === "task" && !i.done && i.due && startOfDay(i.due) <= staleCutoff();
+const visibleItems = () => staleHidden() ? state.items.filter(i => !isStale(i)) : state.items;
+const hiddenStaleCount = () => staleHidden() ? state.items.filter(isStale).length : 0;
 
 const view = $("#view");
 const app = $("#app");
@@ -394,7 +403,7 @@ async function loadItems() {
   cacheSave();
   renderApp();
   updateIdentity();
-  const open = state.items.filter(i => i.kind === "task" && !i.done && !i.mb);
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done && !i.mb);
   if (open.length && localStorage.getItem("sec_autoplan") !== "0") {
     setTimeout(() => autoPlan({ silent: true }), 600);
   }
@@ -478,7 +487,7 @@ function slotIn(blocks, est, from, to) {
 }
 function plannedToday() {
   const s = startOfDay(), e = endOfDay();
-  return state.items
+  return visibleItems()
     .filter(i => i.kind === "task" && i.scheduled_start)
     .filter(i => { const d = new Date(i.scheduled_start); return d >= s && d <= e; })
     .sort((a, b) => new Date(a.scheduled_start) - new Date(b.scheduled_start));
@@ -504,7 +513,7 @@ function estFactorMap() {
 async function autoPlan({ manual = false, silent = false } = {}) {
   if (state.planning || !state.loaded) return;
   if (!manual && Date.now() - state.planAt < 10 * 60 * 1000) return;
-  const open = state.items.filter(i => i.kind === "task" && !i.done && !i.mb);
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done && !i.mb);
   if (!open.length) { if (manual) toast("計画するタスクがありません"); return; }
   if (state.items.length && !("scheduled_start" in state.items[0])) {
     if (manual) toast("先に supabase/phase2.sql を実行してください", 4500);
@@ -677,7 +686,7 @@ function renderNav() {
   updateBadges();
 }
 function updateBadges() {
-  const open = state.items.filter(i => i.kind === "task" && !i.done);
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done);
   const s = startOfDay(), e = endOfDay();
   const today = open.filter(i => i.due && new Date(i.due) >= s && new Date(i.due) <= e).length;
   const over = open.filter(i => i.due && new Date(i.due) < s).length;
@@ -695,7 +704,7 @@ function updateIdentity() {
   const initial = (email.split("@")[0] || "S").slice(0, 1).toUpperCase();
   $("#sideAvatar").textContent = initial || "S";
   $("#sideMail").textContent = email || "未ログイン";
-  const open = state.items.filter(i => i.kind === "task" && !i.done).length;
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done).length;
   const notes = state.items.filter(i => i.kind === "note").length;
   $("#sideStat").innerHTML = `<b>${open}</b>件 未完了 · <b>${notes}</b>件 メモ<br>${state.lastSync ? "最終同期 " + new Date(state.lastSync).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : "未同期"}`;
 }
@@ -730,7 +739,7 @@ function renderApp() {
   const activePj = state.projects.filter(p => !p.archived).length;
   const titles = {
     today: ["今日", todaySub],
-    tasks: ["タスク", `${state.items.filter(i => i.kind === "task" && !i.done).length}件 未完了`],
+    tasks: ["タスク", `${visibleItems().filter(i => i.kind === "task" && !i.done).length}件 未完了`],
     projects: ["プロジェクト", `${activePj}件 進行中`],
     notes: ["メモ", `${state.items.filter(i => i.kind === "note").length}件`],
     settings: ["設定", "表示と動作の設定"],
@@ -789,7 +798,7 @@ function renderList() {
 --------------------------------------------------------------------------- */
 function todayStat() {
   const s = startOfDay(), e = endOfDay();
-  const tasks = state.items.filter(i => i.kind === "task");
+  const tasks = visibleItems().filter(i => i.kind === "task");
   const due = tasks.filter(i => i.due && new Date(i.due) >= s && new Date(i.due) <= e);
   const done = due.filter(i => i.done).length;
   const overdue = tasks.filter(i => !i.done && i.due && new Date(i.due) < s).length;
@@ -808,10 +817,10 @@ function nextTask() {
   const next = planned.find(i => new Date(i.scheduled_start) > now);
   if (next) return { item: next, live: false };
   const s = startOfDay(), e = endOfDay();
-  const dueToday = state.items.filter(i => i.kind === "task" && !i.done && i.due &&
+  const dueToday = visibleItems().filter(i => i.kind === "task" && !i.done && i.due &&
     new Date(i.due) >= s && new Date(i.due) <= e && !plannedToday().some(p => p.id === i.id));
   if (dueToday.length) return { item: dueToday.sort((a, b) => new Date(a.due) - new Date(b.due))[0], unscheduled: true };
-  const over = state.items.filter(i => i.kind === "task" && !i.done && i.due && new Date(i.due) < s);
+  const over = visibleItems().filter(i => i.kind === "task" && !i.done && i.due && new Date(i.due) < s);
   if (over.length) return { item: over.sort((a, b) => new Date(a.due) - new Date(b.due))[0], overdue: true };
   return { item: null };
 }
@@ -834,7 +843,7 @@ function nextHTML() {
       </section>`;
     }
     return `<section class="next"><div class="next-top"><span class="next-label"><i></i>NEXT UP</span></div>
-      <div class="next-empty"><div><h2>${state.items.some(i => i.kind === "task" && !i.done) ? "今日はここまで" : "今日の予定はまだありません"}</h2><p>${state.items.some(i => i.kind === "task" && !i.done) ? "残りのタスクはありません。おつかれさまでした。" : "下の入力から追加するか、秘書に相談してみてください。"}</p></div></div>
+      <div class="next-empty"><div><h2>${visibleItems().some(i => i.kind === "task" && !i.done) ? "今日はここまで" : "今日の予定はまだありません"}</h2><p>${visibleItems().some(i => i.kind === "task" && !i.done) ? "残りのタスクはありません。おつかれさまでした。" : "下の入力から追加するか、秘書に相談してみてください。"}</p></div></div>
       <div class="next-acts"><button class="btn btn-ghost btn-block" data-act="new-note">メモを残す</button></div></section>`;
   }
   const it = n.item;
@@ -1016,8 +1025,8 @@ function todayHTML() {
     ${todayProjectsHTML()}
     ${capacityHTML()}
     ${timelineHTML()}
-    ${groupsHTML(state.items)}
-    ${!state.items.length ? emptyHTML("今日はまだ何もありません", "下の入力からタスクを追加するか、秘書に話しかけてください。", `<button class="btn btn-primary" data-act="focus-quick">${icon("plus")}タスクを追加</button>`, "sun") : ""}
+    ${groupsHTML(visibleItems())}
+    ${!visibleItems().length ? emptyHTML("今日はまだ何もありません", "下の入力からタスクを追加するか、秘書に話しかけてください。", `<button class="btn btn-primary" data-act="focus-quick">${icon("plus")}タスクを追加</button>`, "sun") : ""}
     ${weekHTML()}
     <div class="quick-add" style="margin-top:18px">
       ${icon("plus")}<input id="quick" placeholder="タスクを追加" enterkeyhint="done" autocomplete="off">
@@ -1030,7 +1039,7 @@ function todayHTML() {
    10. タスク / メモ ビュー
 --------------------------------------------------------------------------- */
 function taskListItems() {
-  let rows = state.items.filter(i => i.kind === "task" && matchQuery(i, state.taskQuery));
+  let rows = visibleItems().filter(i => i.kind === "task" && matchQuery(i, state.taskQuery));
   if (state.taskFilter === "open") rows = rows.filter(i => !i.done);
   else if (state.taskFilter === "done") rows = rows.filter(i => i.done);
   if (state.category) rows = rows.filter(i => (i.category || "") === state.category);
@@ -1054,12 +1063,13 @@ function tasksHTML() {
     ${mode === "calendar" ? calendarHTML() : taskListHTML()}`;
 }
 function taskListHTML() {
-  const cats = [...new Set(state.items.filter(i => i.kind === "task").map(i => i.category).filter(Boolean))].slice(0, 12);
+  const cats = [...new Set(visibleItems().filter(i => i.kind === "task").map(i => i.category).filter(Boolean))].slice(0, 12);
   return `<div class="toolbar">
       <div class="searchbox">${icon("search")}<input id="taskSearch" type="search" placeholder="タスクを検索" value="${esc(state.taskQuery)}" aria-label="タスクを検索"><button class="clear" data-act="clear-search" aria-label="検索をクリア">${icon("close")}</button></div>
       <div class="seg" id="taskFilter">${[["open", "未完了"], ["done", "完了"], ["all", "すべて"]].map(([k, l]) => `<button type="button" data-f="${k}" class="${state.taskFilter === k ? "on" : ""}">${l}</button>`).join("")}</div>
     </div>
     ${cats.length ? `<div class="filter-row" style="margin-bottom:12px"><button class="chip ${!state.category ? "on" : ""}" data-act="cat" data-cat="">すべて</button>${cats.map(c => `<button class="chip ${state.category === c ? "on" : ""}" data-act="cat" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>` : ""}
+    ${hiddenStaleCount() ? `<div class="filter-row" style="margin-bottom:12px"><button class="chip" data-act="show-stale">1ヶ月以上前の期限切れ ${hiddenStaleCount()}件を表示</button></div>` : ""}
     <div class="quick-add">${icon("plus")}<input id="quick" placeholder="タスクを追加" enterkeyhint="done" autocomplete="off"><kbd>N</kbd></div>
     <div class="quick-hint" id="quickHint"></div>
     <div id="listArea"></div>`;
@@ -1083,13 +1093,22 @@ function renderListArea() {
   if (!area) return;
   if (state.view === "tasks") {
     const rows = taskListItems();
-    area.innerHTML = rows.length
-      ? rows.map(rowHTML).join("")
-      : emptyHTML(
-          state.taskQuery.trim() ? "見つかりません" : state.taskFilter === "done" ? "完了したタスクはありません" : "タスクはありません",
-          state.taskQuery.trim() ? `「${esc(state.taskQuery.trim())}」に一致するタスクはありません。` : "上の入力から追加できます。",
-          state.taskQuery.trim() ? `<button class="btn btn-ghost" data-act="clear-search">検索をクリア</button>` : `<button class="btn btn-ghost" data-act="focus-quick">タスクを追加</button>`,
-          state.taskQuery.trim() ? "search" : "check");
+    const staleN = hiddenStaleCount();
+    if (rows.length) {
+      area.innerHTML = rows.map(rowHTML).join("");
+    } else if (staleN && !state.taskQuery.trim() && state.taskFilter === "open") {
+      area.innerHTML = emptyHTML(
+        "1ヶ月以上前の期限切れを非表示中",
+        `${staleN}件の古い未完了タスクがあります。表示して整理するか、完了・削除してください。`,
+        `<button class="btn btn-ghost" data-act="show-stale">表示する</button>`,
+        "clock");
+    } else {
+      area.innerHTML = emptyHTML(
+        state.taskQuery.trim() ? "見つかりません" : state.taskFilter === "done" ? "完了したタスクはありません" : "タスクはありません",
+        state.taskQuery.trim() ? `「${esc(state.taskQuery.trim())}」に一致するタスクはありません。` : "上の入力から追加できます。",
+        state.taskQuery.trim() ? `<button class="btn btn-ghost" data-act="clear-search">検索をクリア</button>` : `<button class="btn btn-ghost" data-act="focus-quick">タスクを追加</button>`,
+        state.taskQuery.trim() ? "search" : "check");
+    }
   } else if (state.view === "notes") {
     const q = state.noteQuery;
     const rows = state.items.filter(i => i.kind === "note" && matchQuery(i, q))
@@ -1673,7 +1692,7 @@ function dayCapacity(day) {
   return (w === 0 || w === 6) ? 300 : 240;
 }
 function dayLoad(day) {
-  const planned = state.items
+  const planned = visibleItems()
     .filter(i => i.kind === "task" && i.scheduled_start && sameDay(new Date(i.scheduled_start), day))
     .reduce((a, i) => {
       const s = new Date(i.scheduled_start);
@@ -1685,7 +1704,7 @@ function dayLoad(day) {
 }
 function calendarEvents() {
   const out = [];
-  state.items.filter(i => i.kind === "task" && i.due).forEach(i => {
+  visibleItems().filter(i => i.kind === "task" && i.due).forEach(i => {
     out.push({
       type: i.mb ? "mb" : "task", at: i.due, title: i.title, id: i.id,
       item: i, done: !!i.done, allDay: isAllDayDue(i.due),
@@ -1905,6 +1924,12 @@ view.addEventListener("click", async e => {
   const el = e.target.closest("[data-act]");
   if (!el) return;
   const act = el.dataset.act;
+  if (act === "show-stale") {
+    localStorage.setItem(STALE_KEY, "1");
+    renderApp();
+    toast("1ヶ月以上前の期限切れを表示します", 3000);
+    return;
+  }
   if (act.startsWith("cal-") || act === "ai-plan") {
     e.preventDefault();
     handleCalAction(act, el);
@@ -2271,7 +2296,7 @@ function openPalette() {
 function renderPalette(q) {
   q = q.trim().toLowerCase();
   const actions = paletteActions().filter(a => !q || a.label.toLowerCase().includes(q) || a.id.includes(q));
-  const items = state.items
+  const items = visibleItems()
     .filter(i => q && matchQuery(i, q))
     .slice(0, 8);
   const projects = state.projects
@@ -2789,13 +2814,13 @@ function weekStats() {
   const start = addDays(startOfDay(), -6);
   const done = state.items.filter(i => i.kind === "task" && i.done && i.done_at && new Date(i.done_at) >= start);
   const focusMin = done.filter(i => !i.mb && i.actual_min).reduce((a, i) => a + i.actual_min, 0);
-  const overdue = state.items.filter(i => i.kind === "task" && !i.done && i.due && new Date(i.due) < new Date()).length;
+  const overdue = visibleItems().filter(i => i.kind === "task" && !i.done && i.due && new Date(i.due) < new Date()).length;
   return { done: done.length, focusMin, overdue, created: state.items.filter(i => i.kind === "task" && i.created_at && new Date(i.created_at) >= start).length };
 }
 function renderSettings() {
   const keepScroll = renderSettings._last ? view.scrollTop : 0;
   view.classList.add("narrow");
-  const open = state.items.filter(i => i.kind === "task" && !i.done).length;
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done).length;
   const notes = state.items.filter(i => i.kind === "note").length;
   const online = navigator.onLine;
   const greetOn = localStorage.getItem("sec_voice_greet") !== "0";
@@ -2859,6 +2884,9 @@ function renderSettings() {
       <p class="desc">自動割り当てと集中セッションの既定値。</p>
       <div class="set-row"><div class="set-label"><b>空き時間に自動で割り当てる</b><small>開いたとき・変更時に計画を更新</small></div>
         <div class="set-ctl"><input type="checkbox" class="switch" id="optAuto" ${autoOn ? "checked" : ""}></div>
+      </div>
+      <div class="set-row"><div class="set-label"><b>1ヶ月以上前の期限切れを表示</b><small>既定は非表示。30日以上前の未完了は一覧・カレンダー・件数から隠します(データは残ります)</small></div>
+        <div class="set-ctl"><input type="checkbox" class="switch" id="optShowStale" ${staleHidden() ? "" : "checked"}></div>
       </div>
       <div class="set-row"><div class="set-label"><b>既定キャパシティ</b><small>今日のチップで上書きできます</small></div>
         <div class="set-ctl"><div class="seg" id="capSeg">${[[60, "1h"], [120, "2h"], [180, "3h"], [240, "4h"]].map(([m, l]) => `<button type="button" data-cap="${m}" class="${cap === m ? "on" : ""}">${l}</button>`).join("")}</div></div>
@@ -2970,6 +2998,11 @@ function bindSettings() {
     localStorage.setItem("sec_autoplan", e.target.checked ? "1" : "0");
     if (e.target.checked) autoPlan({ manual: true });
     else toast("自動割り当てをオフにしました");
+  };
+  $("#optShowStale").onchange = e => {
+    localStorage.setItem(STALE_KEY, e.target.checked ? "1" : "0");
+    renderApp();
+    toast(e.target.checked ? "1ヶ月以上前の期限切れを表示します" : "1ヶ月以上前の期限切れを非表示にしました", 3000);
   };
   $("#capSeg")?.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => {
     localStorage.setItem(CAP_KEY, b.dataset.cap);
