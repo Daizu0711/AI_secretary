@@ -8,7 +8,7 @@
    0. 設定
 --------------------------------------------------------------------------- */
 const SUPABASE_URL = "https://pjlccscmpatxyaqcsipy.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBqbGNjc2NtcGF0eHlhcWNzaXB5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODU3MDMsImV4cCI6MjEwOTM2MTcwM30.zKEG_edtbEq_73CoY6q6MpZdEtyfN2TLTdU_biRCok0";
+const SUPABASE_KEY = "sb_publishable_DQGAX8gvJ-DvSki0OV5qJQ_Wj9MV2av";
 const PREVIEW = window.__PREVIEW__ || null;
 const CONFIGURED = !!PREVIEW || (!/YOUR-PROJECT/.test(SUPABASE_URL) && !/YOUR-PUBLISHABLE/.test(SUPABASE_KEY) && /^https?:\/\//.test(SUPABASE_URL));
 
