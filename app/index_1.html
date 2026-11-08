@@ -304,6 +304,36 @@
   </form>
 </dialog>
 
+<!-- ===================== AIヒアリング(EE/IA/TOK) ===================== -->
+<dialog id="pji" class="sheet pji-sheet">
+  <form id="pjiForm" novalidate>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <header class="sheet-head">
+      <div>
+        <h2 id="pjiTitle">AIヒアリング</h2>
+        <span class="pji-sub" id="pjiSub"></span>
+      </div>
+      <button class="icon-btn" id="pjiCancel" type="button" aria-label="閉じる">
+        <svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body">
+      <div id="pjiIntro">
+        <p class="pji-lead">6つの質問に答えると、AIが「提出までの深度」を見て、弱点と次の行動を診断します。本文の代筆はしません。</p>
+        <div id="pjiQuestions"></div>
+      </div>
+      <div id="pjiResult" hidden></div>
+    </div>
+    <footer class="sheet-foot">
+      <span class="sub" id="pjiStatus"></span>
+      <div class="sheet-foot-right">
+        <button class="btn btn-ghost" id="pjiClose" type="button">キャンセル</button>
+        <button class="btn btn-primary" id="pjiSubmit" type="submit">AIに診断してもらう</button>
+      </div>
+    </footer>
+  </form>
+</dialog>
+
 <!-- ===================== 集中モード ===================== -->
 <div id="focus" class="focus" hidden aria-modal="true" role="dialog" aria-label="集中モード">
   <div class="focus-top">

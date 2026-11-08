@@ -3,6 +3,8 @@
 // フロントエンド(app/index_1.html)の askServer() との契約:
 //
 //   Request : { message, history:[{role,content}], tz, now, purpose? }
+//             purpose="project_review" のときは { project, answers } を渡すと
+//             { review:{depth,verdict,strengths,gaps,actions,questions} } を返す
 //   Response: { text, provider, tried:[{provider,ok}], proposals:[{tool,args}] }
 //             または { error }
 //
@@ -74,6 +76,7 @@ const TOOLS: { name: string; description: string; args: Record<string, string> }
   { name: "list_items", description: "タスク/メモを読む。ai_hidden(AI非公開)の行は含まれない。計画・要約・進捗確認では必ず先にこれを呼ぶ。", args: { kind: "'task'|'note'|省略で全部", include_done: "boolean 省略で未完了のみ" } },
   { name: "list_memory", description: "保存済みの記憶を読む。", args: {} },
   { name: "list_mb_tasks", description: "ManageBacから取り込んだ課題(managebac_tasks)を読む。今日の計画にはこれも含める。", args: { only_open: "boolean 省略で未完了のみ(Submitted/Complete系は除外)" } },
+  { name: "list_projects", description: "EE/IA/TOKのプロジェクトとマイルストーンを読む。優先順位・今日やるべきこと・進度の相談では必ず読む。", args: { include_archived: "boolean 省略で除外" } },
   { name: "propose_add_task", description: "タスク追加の提案(承認されるまで追加しない)", args: { title: "string 必須", due: "ISO8601|null", est_minutes: "number|null 見積り分", category: "string", notes: "string" } },
   { name: "propose_add_note", description: "メモ追加の提案", args: { title: "string 必須", body: "string", category: "string" } },
   { name: "propose_update_item", description: "既存タスク/メモの更新提案", args: { id: "string 必須", title: "string?", body: "string?", category: "string?", est_minutes: "number?", due: "ISO8601?" } },
@@ -89,10 +92,24 @@ const SYSTEM_PROMPT = `あなたはユーザー専属のAI秘書です。日本�
 - タスク/メモについて答える前に、必ず list_items / list_memory で実データを読んでから答えること。
 - 追加・更新・完了・削除・記憶の保存は propose_* ツールで「提案」だけを出すこと。適用はユーザーの承認後にアプリが行う。
 - list_items には ai_hidden(AI非公開)の項目は含まれない。見えないデータがある前提で勝手な推測をしないこと。
-- 今日の計画の相談では、list_items と list_mb_tasks の両方を読み、期限・est_minutes・scheduled_start を踏まえて具体的に答えること。
+- 今日の計画・優先順位の相談では、list_items と list_mb_tasks、必要なら list_projects を読み、期限・est_minutes・scheduled_start・プロジェクトの進度を踏まえて具体的に答えること。
+- EE/IA/TOKの進度や「今どれを優先するか」の相談では list_projects を読み、締切・ステージ・語数・未完了マイルストーンから判断すること。
 - est_minutes が無いタスクは、種別・内容・過去の実績から完了時間を推定し、propose_estimate で提案すること。
 - 「いつやるか」の割り当ては propose_schedule で scheduled_start/scheduled_end を提案すること(承認後にタイムラインへ反映される)。
 - EE/IA/TOKなどの本文の代筆はしない。構成案・論点・質問・次の一歩までにすること。`;
+
+const PROJECT_REVIEW_PROMPT = `あなたはIBのEE / IA / TOKを指導する経験豊富なスーパーバイザーです。生徒の本文を代筆せず、診断と次の一歩に集中します。
+与えられたプロジェクト情報とヒアリング回答だけを根拠に、厳しめに評価してください。情報が足りない点は「未検証」として扱い、憶測で補わないこと。値はすべて日本語で書くこと。
+必ず次のJSONだけを返してください。前後に説明文やコードフェンスを付けないこと。
+{
+  "depth": 0から100の整数（提出可能な水準までの到達度。50が「骨格はある」、80以上が「仕上げのみ」）,
+  "verdict": "全体を1〜2文で。励ましより具体性を優先",
+  "strengths": ["根拠のある強みを最大3つ"],
+  "gaps": ["提出前に埋めるべき穴を最大4つ。優先度の高い順"],
+  "actions": [{"title":"今日やる具体的な作業", "minutes":30, "urgency":"now|soon|later", "why":"なぜ今か"}],
+  "questions": ["次回の指導者・先生に確認すべきこと最大3つ"]
+}
+actions は最大4つ、合計が今日〜3日で実行できる粒度にすること。urgency は締切と到達度から判断する。`;
 
 // ---------- Supabase ----------
 function serviceClient() {
@@ -139,7 +156,7 @@ function isModelDead(code: number | undefined, msg: string): boolean {
   return /not found|does not exist|is not found|unknown model|invalid model|model.*(not|no longer)|retired/i.test(msg);
 }
 
-async function callGemini(messages: Msg[], model: string): Promise<ProviderResult> {
+async function callGemini(messages: Msg[], model: string, withTools = true): Promise<ProviderResult> {
   const sys = messages.find((m) => m.role === "system")?.content ?? SYSTEM_PROMPT;
   const contents = [];
   for (const m of messages.filter((x) => x.role !== "system")) {
@@ -165,9 +182,9 @@ async function callGemini(messages: Msg[], model: string): Promise<ProviderResul
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: sys }] },
         contents,
-        tools: [{ functionDeclarations: TOOLS.map((t) => ({
+        ...(withTools ? { tools: [{ functionDeclarations: TOOLS.map((t) => ({
           name: t.name, description: t.description, parameters: toolParams()[t.name],
-        })) }],
+        })) }] } : {}),
       }),
     });
   if (r.status === 429) throw Object.assign(new Error("gemini 429"), { code: 429 });
@@ -186,15 +203,17 @@ async function callGemini(messages: Msg[], model: string): Promise<ProviderResul
   return { text, toolCalls };
 }
 
-async function callNIM(messages: Msg[], model: string): Promise<ProviderResult> {
+async function callNIM(messages: Msg[], model: string, withTools = true): Promise<ProviderResult> {
   const r = await fetchWithTimeout(`${NIM_BASE}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${NIM_API_KEY}` },
     body: JSON.stringify({
       model,
       messages,
-      tools: TOOLS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: toolParams()[t.name] } })),
-      tool_choice: "auto",
+      ...(withTools ? {
+        tools: TOOLS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: toolParams()[t.name] } })),
+        tool_choice: "auto",
+      } : {}),
     }),
   });
   if (r.status === 429) throw Object.assign(new Error("nim 429"), { code: 429 });
@@ -261,6 +280,26 @@ async function runTool(sb: ReturnType<typeof serviceClient>, userId: string, cal
       if (error) return `error: ${error.message}`;
       return JSON.stringify(data ?? []);
     }
+    case "list_projects": {
+      const includeArchived = call.args.include_archived === true;
+      let q = sb.from("sec_projects")
+        .select("id,kind,title,subject,stage,target_words,current_words,due,supervisor,archived,updated_at")
+        .eq("user_id", userId)
+        .order("due", { ascending: true, nullsFirst: false });
+      if (!includeArchived) q = q.eq("archived", false);
+      const { data, error } = await q.limit(50);
+      if (error) return `error: ${error.message}`;
+      const { data: ms, error: msErr } = await sb.from("sec_milestones")
+        .select("project_id,title,due,done")
+        .eq("user_id", userId)
+        .order("due", { ascending: true, nullsFirst: false });
+      if (msErr) return `error: ${msErr.message}`;
+      const rows = (data ?? []).map((p: Record<string, unknown>) => ({
+        ...p,
+        milestones: (ms ?? []).filter((m: { project_id: string }) => m.project_id === String(p.id)),
+      }));
+      return JSON.stringify(rows);
+    }
     default: {
       if (call.name.startsWith("propose_")) {
         proposals.push({ tool: call.name, args: call.args });
@@ -273,10 +312,10 @@ async function runTool(sb: ReturnType<typeof serviceClient>, userId: string, cal
 
 // ---------- ルーター ----------
 // モデル候補を順に試し、404/退役なら次のモデルへ。全滅したら次の提供元へ。
-async function callWithModels(p: "gemini" | "nim", models: string[], messages: Msg[], tried: Tried[]): Promise<ProviderResult | null> {
+async function callWithModels(p: "gemini" | "nim", models: string[], messages: Msg[], tried: Tried[], withTools = true): Promise<ProviderResult | null> {
   for (const model of models) {
     try {
-      const r = p === "gemini" ? await callGemini(messages, model) : await callNIM(messages, model);
+      const r = p === "gemini" ? await callGemini(messages, model, withTools) : await callNIM(messages, model, withTools);
       tried.push({ provider: `${p}:${model}`, ok: true });
       return r;
     } catch (e) {
@@ -289,9 +328,9 @@ async function callWithModels(p: "gemini" | "nim", models: string[], messages: M
   return null;
 }
 
-async function callProvider(p: string, messages: Msg[], userId: string, purpose: string, tried: Tried[]): Promise<ProviderResult | null> {
-  if (p === "gemini" && GEMINI_API_KEY) return await callWithModels("gemini", GEMINI_MODELS, messages, tried);
-  if (p === "nim" && NIM_API_KEY) return await callWithModels("nim", NIM_MODELS, messages, tried);
+async function callProvider(p: string, messages: Msg[], userId: string, purpose: string, tried: Tried[], withTools = true): Promise<ProviderResult | null> {
+  if (p === "gemini" && GEMINI_API_KEY) return await callWithModels("gemini", GEMINI_MODELS, messages, tried, withTools);
+  if (p === "nim" && NIM_API_KEY) return await callWithModels("nim", NIM_MODELS, messages, tried, withTools);
   if (p === "hermes") {
     const lastUser = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n\n");
     return await callHermes(userId, purpose, lastUser);
@@ -299,13 +338,13 @@ async function callProvider(p: string, messages: Msg[], userId: string, purpose:
   return null; // キー未設定
 }
 
-async function route(purpose: string, messages: Msg[], userId: string, tried: Tried[]): Promise<{ provider: string; result: ProviderResult } | null> {
+async function route(purpose: string, messages: Msg[], userId: string, tried: Tried[], withTools = true): Promise<{ provider: string; result: ProviderResult } | null> {
   const order = purpose === "hint" ? ["nim", "gemini"] : ["gemini", "nim", "hermes"];
   for (const p of order) {
     if (inCooldown(p)) { tried.push({ provider: p, ok: false }); continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await callProvider(p, messages, userId, purpose, tried);
+        const r = await callProvider(p, messages, userId, purpose, tried, withTools);
         if (r) return { provider: p, result: r };
         break; // キー未設定/全モデル退役/Hermesオフライン → 次へ
       } catch (e) {
@@ -321,6 +360,45 @@ async function route(purpose: string, messages: Msg[], userId: string, tried: Tr
     markCooldown(p); // 失敗が続いた提供元は10分休ませる
   }
   return null;
+}
+
+// ---------- プロジェクト診断のJSON抽出 ----------
+function extractJson(text: string): Record<string, unknown> | null {
+  const t = String(text ?? "").trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a < 0 || b <= a) return null;
+  try {
+    const v = JSON.parse(t.slice(a, b + 1));
+    return v && typeof v === "object" ? v as Record<string, unknown> : null;
+  } catch { return null; }
+}
+function normalizeReview(text: string) {
+  const raw = extractJson(text);
+  if (!raw) return null;
+  const strings = (v: unknown) => Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === "string").slice(0, 8).map((x) => x.slice(0, 400))
+    : [];
+  const actions = Array.isArray(raw.actions) ? raw.actions.slice(0, 6).map((a) => {
+    const o = (a ?? {}) as Record<string, unknown>;
+    const minutes = Number(o.minutes);
+    return {
+      title: String(o.title ?? "").slice(0, 180),
+      minutes: Number.isFinite(minutes) ? Math.max(5, Math.min(240, Math.round(minutes))) : 30,
+      urgency: ["now", "soon", "later"].includes(String(o.urgency)) ? String(o.urgency) : "soon",
+      why: String(o.why ?? "").slice(0, 240),
+    };
+  }).filter((a) => a.title) : [];
+  const depth = Number(raw.depth);
+  return {
+    depth: Number.isFinite(depth) ? Math.max(0, Math.min(100, Math.round(depth))) : null,
+    verdict: String(raw.verdict ?? "").slice(0, 600),
+    strengths: strings(raw.strengths),
+    gaps: strings(raw.gaps),
+    actions,
+    questions: strings(raw.questions),
+  };
 }
 
 // ---------- ハンドラ ----------
@@ -364,6 +442,24 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const purpose: string = body.purpose ?? "chat";
     const nowCtx = [body.now, body.tz ? `タイムゾーン: ${body.tz}` : ""].filter(Boolean).join(" / ");
+
+    if (purpose === "project_review") {
+      const project = body.project ?? {};
+      const answers = body.answers ?? {};
+      const reviewMessages: Msg[] = [
+        { role: "system", content: PROJECT_REVIEW_PROMPT + (nowCtx ? `\n現在時刻: ${nowCtx}` : "") },
+        { role: "user", content: JSON.stringify({ project, answers }, null, 2).slice(0, 14000) },
+      ];
+      const routed = await route("chat", reviewMessages, user.id, tried, false);
+      if (!routed) {
+        await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable" });
+        return Response.json({ error: "all AI providers unavailable (キー未設定またはクールダウン中)" }, { status: 503, headers: cors });
+      }
+      const review = normalizeReview(routed.result.text);
+      await logAi({ userId: user.id, provider: routed.provider, purpose, ok: true, detail: { depth: review?.depth ?? null } });
+      return Response.json({ text: routed.result.text, provider: routed.provider, tried, proposals: [], review }, { headers: cors });
+    }
+
     const history: Msg[] = Array.isArray(body.history) ? body.history : [];
     const messages: Msg[] = [
       { role: "system", content: SYSTEM_PROMPT + (nowCtx ? `\n現在時刻: ${nowCtx}` : "") },

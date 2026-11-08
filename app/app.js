@@ -84,6 +84,9 @@ const state = {
   projectId: null, projectFilter: "all", projectsMissing: false, projectsError: "",
   view: "today", listView: "today",
   taskFilter: "open", noteQuery: "", taskQuery: "", category: "",
+  taskMode: localStorage.getItem("sec_task_mode") === "calendar" ? "calendar" : "list",
+  calMonth: (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })(),
+  calSelected: ymd(new Date()), calFilter: "all",
   loaded: false, loading: false, loadError: "", lastSync: 0,
   chat: [], sending: false,
   planning: false, planAt: 0,
@@ -1039,6 +1042,18 @@ function matchQuery(i, q) {
   return [i.title, i.body, i.category].some(v => (v || "").toLowerCase().includes(q));
 }
 function tasksHTML() {
+  const mode = state.taskMode;
+  return `<div class="toolbar">
+      <div class="seg" id="taskModeSeg">
+        <button type="button" data-m="list" class="${mode === "list" ? "on" : ""}">リスト</button>
+        <button type="button" data-m="calendar" class="${mode === "calendar" ? "on" : ""}">カレンダー</button>
+      </div>
+      <div class="grow"></div>
+      ${mode === "calendar" ? `<button type="button" class="btn btn-ghost btn-sm" data-act="ai-plan" data-date="${state.calSelected}">${icon("spark")}AIに相談</button>` : ""}
+    </div>
+    ${mode === "calendar" ? calendarHTML() : taskListHTML()}`;
+}
+function taskListHTML() {
   const cats = [...new Set(state.items.filter(i => i.kind === "task").map(i => i.category).filter(Boolean))].slice(0, 12);
   return `<div class="toolbar">
       <div class="searchbox">${icon("search")}<input id="taskSearch" type="search" placeholder="タスクを検索" value="${esc(state.taskQuery)}" aria-label="タスクを検索"><button class="clear" data-act="clear-search" aria-label="検索をクリア">${icon("close")}</button></div>
@@ -1216,6 +1231,8 @@ function projectDetailHTML() {
       <div class="ring" style="--p:${prog}%" title="進捗"><span>${prog}%</span></div>
     </div>
 
+    ${aiReviewHTML(p)}
+
     <section class="card pj-section">
       <h2>${icon("flag")}ステージ <span class="stage-count">${si + 1} / ${STAGES.length}</span></h2>
       <div class="stage-track">${stages}</div>
@@ -1253,6 +1270,7 @@ function projectDetailHTML() {
 
     <div class="pj-actions">
       <button type="button" class="btn btn-primary" data-act="pj-do" data-id="${p.id}">${icon("play")}今日やる(45分)</button>
+      <button type="button" class="btn btn-ghost" data-act="pji-open" data-id="${p.id}">${icon("spark")}AIヒアリング</button>
       <button type="button" class="btn btn-ghost" data-act="pj-edit" data-id="${p.id}">${icon("edit")}編集</button>
       <button type="button" class="btn btn-danger-ghost" data-act="pj-delete" data-id="${p.id}">削除</button>
     </div>
@@ -1356,6 +1374,185 @@ async function projectDo(id) {
   if (it) startFocus(it, 45);
 }
 
+/* ---------- AIヒアリング / 診断 ---------- */
+let pjiProject = null, pjiReview = null, pjiBusy = false;
+
+function interviewQuestions(p) {
+  const k = p.kind;
+  return [
+    { key: "rq", label: k === "TOK" ? "知識の問い(または主張)を一文で書いてください。" : "リサーチクエスチョン(または主張)を一文で書いてください。", ph: "例: 温度が酵素の反応速度に与える影響" },
+    { key: "method", label: k === "TOK" ? "その問いにどう答えますか。具体例と論点を書いてください。" : "方法・実験・数学的プロセスで、具体的に何をするかを書いてください。" },
+    { key: "evidence", label: "根拠にできるデータ・結果・引用は何がありますか?", ph: "まだなら「なし」で構いません" },
+    { key: "limits", label: "反対意見・限界・まだ検証できていない点は?" },
+    { key: "feedback", label: "指導者や先生に言われたこと、直したことは?" },
+    { key: "blocker", label: "今いちばん詰まっていることと、今週使える時間は?" },
+  ];
+}
+function urgencyLabel(u) {
+  return u === "now" ? `<span class="pill over">今すぐ</span>`
+    : u === "soon" ? `<span class="pill warn">今週</span>`
+    : `<span class="pill gray">余裕</span>`;
+}
+function aiReviewHTML(p) {
+  const rev = p.ai_review;
+  if (!rev) {
+    return `<section class="card pj-section pj-ai">
+      <h2>${icon("spark")}AI診断</h2>
+      <p class="desc">6つの質問に答えると、AIが「提出までの深度」と弱点、今週やることを診断します。</p>
+      <button class="btn btn-primary btn-sm" style="margin-top:10px" data-act="pji-open" data-id="${p.id}">${icon("spark")}AIヒアリングをはじめる</button>
+    </section>`;
+  }
+  const depth = rev.depth;
+  const actions = (rev.actions || []).map((a, i) => `<div class="ai-action">
+      <div class="t"><b>${esc(a.title)}</b><small>${esc(a.why || "")}${a.minutes ? ` · <span style="white-space:nowrap">${a.minutes}分</span>` : ""}</small></div>
+      ${urgencyLabel(a.urgency)}
+      <button type="button" class="btn btn-ghost btn-sm" data-act="pji-add-action" data-id="${p.id}" data-idx="${i}">追加</button>
+    </div>`).join("");
+  return `<section class="card pj-section pj-ai">
+    <h2>${icon("spark")}AI診断 ${depth != null ? `<span class="stage-count">${depth}/100</span>` : ""}</h2>
+    <p class="pj-verdict">${esc(rev.verdict || "")}</p>
+    <div class="ai-cols">
+      <div class="pji-sec" style="margin-top:0"><h4>強み</h4><ul>${(rev.strengths || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
+      <div class="pji-sec" style="margin-top:0"><h4>伸びしろ</h4><ul>${(rev.gaps || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
+    </div>
+    ${actions ? `<div class="pji-sec"><h4>次にやること</h4><div class="ai-actions">${actions}</div></div>` : ""}
+    ${(rev.questions || []).length ? `<div class="pji-sec"><h4>指導者に聞くこと</h4><ul>${rev.questions.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    <div class="pj-ai-foot">
+      <span class="sub">${p.ai_review_at ? new Date(p.ai_review_at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="pji-open" data-id="${p.id}">${icon("refresh")}再診断</button>
+    </div>
+  </section>`;
+}
+function openInterview(p) {
+  if (!p) return;
+  pjiProject = p; pjiReview = null; pjiBusy = false;
+  $("#pjiTitle").textContent = `AIヒアリング — ${kindLabel(p.kind)}`;
+  $("#pjiSub").textContent = `${p.title} · ${STAGES[stageIndex(p.stage)].label}${p.due ? ` · 期限 ${fmtDue(p.due)}` : ""}`;
+  $("#pjiQuestions").innerHTML = interviewQuestions(p).map((q, i) => `<div class="pji-q">
+      <label for="pji-${q.key}">${i + 1}. ${esc(q.label)}</label>
+      <textarea id="pji-${q.key}" data-q="${q.key}" placeholder="${esc(q.ph || "")}">${q.key === "feedback" ? esc(p.feedback || "") : ""}</textarea>
+    </div>`).join("");
+  $("#pjiIntro").hidden = false;
+  $("#pjiResult").hidden = true;
+  $("#pjiResult").innerHTML = "";
+  $("#pjiSubmit").hidden = false;
+  $("#pjiSubmit").disabled = false;
+  $("#pjiSubmit").textContent = "AIに診断してもらう";
+  $("#pjiClose").textContent = "キャンセル";
+  $("#pjiStatus").textContent = "";
+  $("#pji").showModal();
+}
+function renderInterviewResult(p, review, text) {
+  const depth = review?.depth;
+  const actions = (review?.actions || []).map((a, i) => `<div class="ai-action">
+      <div class="t"><b>${esc(a.title)}</b><small>${esc(a.why || "")}${a.minutes ? ` · <span style="white-space:nowrap">${a.minutes}分</span>` : ""}</small></div>
+      ${urgencyLabel(a.urgency)}
+      <button type="button" class="btn btn-ghost btn-sm" data-act="pji-add-action" data-idx="${i}">追加</button>
+    </div>`).join("");
+  const body = review
+    ? `<div class="ai-cols">
+        <div class="pji-sec" style="margin-top:0"><h4>強み</h4><ul>${(review.strengths || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
+        <div class="pji-sec" style="margin-top:0"><h4>伸びしろ</h4><ul>${(review.gaps || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
+      </div>
+      ${actions ? `<div class="pji-sec"><h4>次にやること</h4><div class="ai-actions">${actions}</div></div>` : ""}
+      ${(review.questions || []).length ? `<div class="pji-sec"><h4>指導者に聞くこと</h4><ul>${review.questions.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}`
+    : `<div class="pji-sec"><h4>AIの回答</h4><p style="white-space:pre-wrap;font-size:12.5px;line-height:1.75">${esc(text || "")}</p></div>`;
+  $("#pjiResult").innerHTML = `
+    <div class="pji-depth">
+      ${depth != null ? `<div class="ring" style="--p:${depth}%"><span>${depth}</span></div>` : ""}
+      <div><h3>${depth != null ? `深度 ${depth}/100` : "AIの診断"}</h3>
+        <p class="pji-verdict">${esc(review?.verdict || (text || "").slice(0, 700))}</p></div>
+    </div>
+    ${body}`;
+}
+async function submitInterview() {
+  if (pjiBusy || !pjiProject) return;
+  const answers = {};
+  $$("#pjiQuestions [data-q]").forEach(t => { answers[t.dataset.q] = t.value.trim(); });
+  if (!Object.values(answers).some(Boolean)) { toast("1つ以上入力してください"); return; }
+  const p = pjiProject;
+  pjiBusy = true;
+  $("#pjiSubmit").disabled = true;
+  $("#pjiSubmit").textContent = "診断中…";
+  $("#pjiIntro").hidden = true;
+  $("#pjiResult").hidden = false;
+  $("#pjiResult").innerHTML = `<div class="pji-loading"><div class="spinner"></div><b>AIが回答を読んでいます</b><span>深度・弱点・今週やることを整理しています。</span></div>`;
+  $("#pjiStatus").textContent = "";
+  try {
+    const project = {
+      title: p.title, kind: p.kind, subject: p.subject,
+      stage: STAGES[stageIndex(p.stage)].label,
+      target_words: p.target_words, current_words: p.current_words,
+      due: p.due, supervisor: p.supervisor, feedback: p.feedback,
+      milestones: (p.milestones || []).map(m => ({ title: m.title, due: m.due, done: m.done })),
+    };
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const { data, error } = await sb.functions.invoke("ai", {
+      body: { purpose: "project_review", project, answers, tz, now: new Date().toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short", timeZone: tz }) },
+    });
+    if (error) {
+      let msg = error.message;
+      try { const j = await error.context.json(); msg = j.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    if (!pjiProject) { pjiBusy = false; return; }
+    const review = data?.review || null;
+    pjiReview = review;
+    renderInterviewResult(p, review, data?.text || "");
+    if (review) {
+      const at = new Date().toISOString();
+      const { error: saveErr } = await sb.from("sec_projects").update({ ai_review: review, ai_review_at: at }).eq("id", p.id);
+      if (saveErr) toast("診断は表示しましたが保存できません(phase3.sql を再実行)", 5500);
+      else { pjiProject = { ...p, ai_review: review, ai_review_at: at }; await loadProjects(); }
+    }
+    $("#pjiSubmit").hidden = true;
+    $("#pjiClose").textContent = "閉じる";
+    $("#pjiStatus").textContent = `${data?.provider || "AI"} · ${new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}`;
+  } catch (e) {
+    $("#pjiResult").innerHTML = `<div class="errbox" style="margin:0"><span>診断できませんでした<br><span class="sub">${esc(e.message || String(e))}</span></span></div>
+      <div class="pji-sec"><p class="sub">AI Edge Function を再デプロイしているか、ログイン状態を確認してください。</p></div>`;
+    $("#pjiSubmit").hidden = false;
+    $("#pjiSubmit").disabled = false;
+    $("#pjiSubmit").textContent = "もう一度";
+    $("#pjiClose").textContent = "閉じる";
+  }
+  pjiBusy = false;
+}
+async function addAiAction(p, action, btn) {
+  if (!p || !action) return;
+  const days = action.urgency === "now" ? 0 : action.urgency === "soon" ? 3 : 7;
+  const due = endOfDay(addDays(new Date(), days));
+  const { data, error } = await sb.from("sec_items").insert({
+    kind: "task", title: action.title,
+    category: p.subject || kindLabel(p.kind),
+    est_minutes: action.minutes || 30,
+    due: due.toISOString(),
+    body: `${p.title} / AI診断のアクション`,
+  }).select().single();
+  if (error) { toast(error.message, 3500); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "追加済み"; }
+  await loadItems();
+  toast("タスクに追加しました", 5000, {
+    label: "集中する",
+    fn: () => { const it = state.items.find(x => x.id === data.id); if (it) startFocus(it, action.minutes || 30); },
+  });
+}
+$("#pjiForm").addEventListener("submit", e => { e.preventDefault(); submitInterview(); });
+$("#pjiCancel").onclick = () => $("#pji").close();
+$("#pjiClose").onclick = () => $("#pji").close();
+$("#pji").addEventListener("click", e => { if (e.target === $("#pji")) $("#pji").close(); });
+$("#pji").addEventListener("close", () => {
+  const wasBusy = pjiBusy;
+  pjiProject = null; pjiReview = null; pjiBusy = false;
+  if (!wasBusy && state.view === "projects") renderApp();
+});
+$("#pjiResult").addEventListener("click", async e => {
+  const b = e.target.closest("[data-act='pji-add-action']");
+  if (!b || !pjiProject) return;
+  const action = (pjiReview?.actions || [])[parseInt(b.dataset.idx, 10)];
+  if (action) await addAiAction(pjiProject, action, b);
+});
+
 /* ---------- プロジェクト操作 ---------- */
 async function handleProjectAction(act, el) {
   const id = el.dataset.id || state.projectId;
@@ -1369,6 +1566,12 @@ async function handleProjectAction(act, el) {
     case "pj-filter": state.projectFilter = el.dataset.f || "all"; renderList(); return;
     case "pj-retry": await loadProjects(); renderApp(); return;
     case "pj-edit": if (p) openProjectEditor(p); return;
+    case "pji-open": if (p) openInterview(p); return;
+    case "pji-add-action": {
+      const a = (p?.ai_review?.actions || [])[parseInt(el.dataset.idx, 10)];
+      if (a) await addAiAction(p, a, el);
+      return;
+    }
     case "pj-stage": {
       if (!p) return;
       const stage = el.dataset.stage;
@@ -1459,6 +1662,191 @@ async function handleProjectAction(act, el) {
 }
 
 /* ---------------------------------------------------------------------------
+   10.6 カレンダー(締切の俯瞰)
+--------------------------------------------------------------------------- */
+const dayFromKey = k => { const [y, m, d] = String(k).split("-").map(Number); return new Date(y, (m || 1) - 1, d || 1); };
+const isAllDayDue = iso => { const d = new Date(iso); return d.getHours() === 23 && d.getMinutes() === 59; };
+
+function dayCapacity(day) {
+  if (sameDay(day, new Date())) return todayCapacity();
+  const w = day.getDay();
+  return (w === 0 || w === 6) ? 300 : 240;
+}
+function dayLoad(day) {
+  const planned = state.items
+    .filter(i => i.kind === "task" && i.scheduled_start && sameDay(new Date(i.scheduled_start), day))
+    .reduce((a, i) => {
+      const s = new Date(i.scheduled_start);
+      const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + (i.est_minutes || 30) * 60000);
+      return a + Math.round((e - s) / 60000);
+    }, 0);
+  const cap = dayCapacity(day);
+  return { planned, cap, free: Math.max(0, cap - planned) };
+}
+function calendarEvents() {
+  const out = [];
+  state.items.filter(i => i.kind === "task" && i.due).forEach(i => {
+    out.push({
+      type: i.mb ? "mb" : "task", at: i.due, title: i.title, id: i.id,
+      item: i, done: !!i.done, allDay: isAllDayDue(i.due),
+    });
+  });
+  activeProjects().forEach(p => {
+    if (p.due) out.push({ type: "project", at: p.due, title: p.title, id: p.id, project: p, allDay: true });
+    (p.milestones || []).forEach(m => {
+      if (m.due && !m.done) out.push({ type: "milestone", at: m.due, title: m.title, id: p.id, project: p, milestone: m, allDay: true });
+    });
+  });
+  return out;
+}
+function calendarFilterMatch(e) {
+  const f = state.calFilter;
+  if (f === "all") return true;
+  if (f === "project") return e.type === "project" || e.type === "milestone";
+  return e.type === f;
+}
+function calendarByDay() {
+  const map = new Map();
+  for (const e of calendarEvents()) {
+    const k = ymd(new Date(e.at));
+    const arr = map.get(k);
+    if (arr) arr.push(e); else map.set(k, [e]);
+  }
+  map.forEach(arr => arr.sort((a, b) => new Date(a.at) - new Date(b.at)));
+  return map;
+}
+function urgencyInfo(iso, done) {
+  if (done) return { k: "done", label: "完了" };
+  const days = Math.round((startOfDay(iso) - startOfDay()) / 864e5);
+  if (days < 0) return { k: "over", label: `${-days}日超過` };
+  if (days === 0) return { k: "today", label: "今日" };
+  if (days <= 3) return { k: "soon", label: `あと${days}日` };
+  return { k: "later", label: `あと${days}日` };
+}
+function urgencyPill(iso, done) {
+  if (done) return `<span class="pill ok">完了</span>`;
+  const u = urgencyInfo(iso, done);
+  const cls = u.k === "over" ? "over" : u.k === "later" ? "gray" : "warn";
+  return `<span class="pill ${cls}">${u.label}</span>`;
+}
+function calendarHTML() {
+  const y = state.calMonth.getFullYear(), m = state.calMonth.getMonth();
+  const first = new Date(y, m, 1);
+  const start = addDays(first, -first.getDay());
+  const byDay = calendarByDay();
+  const todayKey = ymd(new Date());
+  const filters = [["all", "すべて"], ["task", "タスク"], ["mb", "MB"], ["project", "PJ"]];
+  const chips = filters.map(([k, l]) =>
+    `<button type="button" class="chip ${state.calFilter === k ? "on" : ""}" data-act="cal-filter" data-f="${k}">${l}</button>`).join("");
+  const cells = [];
+  const cellCount = Math.ceil((first.getDay() + new Date(y, m + 1, 0).getDate()) / 7) * 7;
+  for (let i = 0; i < cellCount; i++) {
+    const d = addDays(start, i);
+    const key = ymd(d);
+    const evs = (byDay.get(key) || []).filter(calendarFilterMatch);
+    const out = d.getMonth() !== m;
+    const cls = [out ? "out" : "", key === todayKey ? "today" : "", key === state.calSelected ? "sel" : ""].filter(Boolean).join(" ");
+    const dots = evs.slice(0, 3).map(e => `<i class="${e.type}"></i>`).join("");
+    const mini = evs.slice(0, 2).map((e, idx) => `<span class="cal-mini ${idx ? "dim" : ""}">${esc(e.title)}</span>`).join("");
+    cells.push(`<button type="button" class="cal-cell ${cls}" data-act="cal-select" data-date="${key}" aria-label="${d.getMonth() + 1}月${d.getDate()}日 ${evs.length}件の締切">
+      <span class="cal-num">${d.getDate()}</span>
+      <span class="cal-dots">${dots}</span>${mini}
+    </button>`);
+  }
+  return `<div class="cal-nav">
+      <button class="icon-btn" type="button" data-act="cal-prev" aria-label="前の月">${icon("arrow-left")}</button>
+      <b>${y}年${m + 1}月</b>
+      <button class="icon-btn" type="button" data-act="cal-next" aria-label="次の月">${icon("arrow-right")}</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-act="cal-today">今日</button>
+    </div>
+    <div class="filter-row" style="margin-bottom:10px">${chips}</div>
+    <div class="cal-week">${["日", "月", "火", "水", "木", "金", "土"].map(w => `<span>${w}</span>`).join("")}</div>
+    <div class="cal-grid">${cells.join("")}</div>
+    ${calDayHTML(byDay)}`;
+}
+function calDayHTML(byDay) {
+  const key = state.calSelected;
+  const day = dayFromKey(key);
+  const evs = (byDay.get(key) || []).filter(calendarFilterMatch);
+  const isToday = key === ymd(new Date());
+  const load = dayLoad(day);
+  const dateLabel = `${day.getMonth() + 1}月${day.getDate()}日(${"日月火水木金土"[day.getDay()]})`;
+  const typeLabel = { task: "タスク", mb: "ManageBac", project: "プロジェクト", milestone: "マイルストーン" };
+  const rows = evs.map(e => {
+    const act = (e.type === "project" || e.type === "milestone") ? "open-project" : e.type === "mb" ? "open-mb" : "edit";
+    return `<button type="button" class="cal-ev ${e.done ? "done" : ""}" data-act="${act}" data-id="${e.id}">
+      <span class="cal-ev-dot ${e.type}"></span>
+      <span class="cal-ev-main"><b>${esc(e.title)}</b><span>${typeLabel[e.type]} · ${e.allDay ? "終日" : fmtClock(e.at)}</span></span>
+      ${urgencyPill(e.at, e.done)}
+    </button>`;
+  }).join("");
+  return `<section class="cal-day" id="calDay">
+    <div class="cal-day-head">
+      <b>${dateLabel}</b>
+      ${isToday ? `<span class="pill">今日</span>` : ""}
+      <span class="sub">${evs.length}件の締切</span>
+      <span class="pill ${load.free < 30 ? "warn" : "gray"}">空き 約${fmtMin(load.free)}</span>
+      <button class="btn btn-ghost btn-sm" type="button" data-act="ai-plan" data-date="${key}">${icon("spark")}AIに相談</button>
+    </div>
+    ${rows || `<div class="cal-empty">この日の締切はありません。${load.free >= 60 ? "余白の日です。" : ""}</div>`}
+  </section>`;
+}
+function calMove(delta) {
+  const next = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() + delta, 1);
+  state.calMonth = next;
+  const now = new Date();
+  state.calSelected = (next.getFullYear() === now.getFullYear() && next.getMonth() === now.getMonth())
+    ? ymd(now) : ymd(next);
+  renderList();
+}
+function calToday() {
+  const now = new Date();
+  state.calMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  state.calSelected = ymd(now);
+  renderList();
+}
+function askAiPlan(dateKey) {
+  const key = dateKey || state.calSelected || ymd(new Date());
+  const day = dayFromKey(key);
+  const load = dayLoad(day);
+  const when = sameDay(day, new Date())
+    ? "今日"
+    : day.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" });
+  const deadlines = (calendarByDay().get(key) || []).filter(calendarFilterMatch).slice(0, 6)
+    .map(e => `${e.title}(${urgencyInfo(e.at, e.done).label})`).join("、");
+  const msg = `${when}の空き時間は約${fmtMin(load.free)}です。${deadlines ? `この日の締切: ${deadlines}。` : ""}EE/IA/TOKの進度も見て、この日にやるべきタスクを3つ、理由と所要時間つきで提案して。`;
+  if (!isWide()) setView("chat");
+  else {
+    app.dataset.chat = "on";
+    setTimeout(() => $("#q").focus(), 80);
+  }
+  setTimeout(() => sendChat(msg), 150);
+}
+function handleCalAction(act, el) {
+  if (act === "cal-prev") { calMove(-1); return; }
+  if (act === "cal-next") { calMove(1); return; }
+  if (act === "cal-today") { calToday(); return; }
+  if (act === "cal-select") {
+    const key = el.dataset.date;
+    state.calSelected = key;
+    const d = dayFromKey(key);
+    if (d.getMonth() !== state.calMonth.getMonth() || d.getFullYear() !== state.calMonth.getFullYear()) {
+      state.calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    }
+    renderList();
+    if (!isWide()) {
+      setTimeout(() => {
+        const el = document.getElementById("calDay");
+        if (el) el.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+      }, 60);
+    }
+    return;
+  }
+  if (act === "cal-filter") { state.calFilter = el.dataset.f || "all"; renderList(); return; }
+  if (act === "ai-plan") { askAiPlan(el.dataset.date); return; }
+}
+
+/* ---------------------------------------------------------------------------
    11. リストのイベント
 --------------------------------------------------------------------------- */
 function bindList() {
@@ -1472,19 +1860,28 @@ function bindList() {
     if (qh && !qh.innerHTML) qh.innerHTML = `<span>「明日15時 #化学 45分」のように書けます</span>`;
   }
   if (state.view === "tasks") {
-    const s = $("#taskSearch");
-    if (s) s.addEventListener("input", () => { state.taskQuery = s.value; renderListArea(); });
-    $$("#taskFilter [data-f]").forEach(b => b.onclick = () => {
-      state.taskFilter = b.dataset.f;
-      $$("#taskFilter [data-f]").forEach(x => x.classList.toggle("on", x === b));
-      renderListArea();
+    $$("#taskModeSeg [data-m]").forEach(b => b.onclick = () => {
+      state.taskMode = b.dataset.m;
+      localStorage.setItem("sec_task_mode", state.taskMode);
+      renderList._last = null;
+      renderList();
     });
+    if (state.taskMode === "list") {
+      const s = $("#taskSearch");
+      if (s) s.addEventListener("input", () => { state.taskQuery = s.value; renderListArea(); });
+      $$("#taskFilter [data-f]").forEach(b => b.onclick = () => {
+        state.taskFilter = b.dataset.f;
+        $$("#taskFilter [data-f]").forEach(x => x.classList.toggle("on", x === b));
+        renderListArea();
+      });
+      renderListArea();
+    }
   }
   if (state.view === "notes") {
     const s = $("#noteSearch");
     if (s) s.addEventListener("input", () => { state.noteQuery = s.value; renderListArea(); });
+    renderListArea();
   }
-  if (state.view === "tasks" || state.view === "notes") renderListArea();
   if (state.view === "projects" && state.projectId) {
     const activeStage = document.querySelector(".stage-step.on");
     if (activeStage) {
@@ -1508,7 +1905,12 @@ view.addEventListener("click", async e => {
   const el = e.target.closest("[data-act]");
   if (!el) return;
   const act = el.dataset.act;
-  if (act.startsWith("pj-") || act.startsWith("ms-") || act === "open-project" || act === "open-projects" || act === "new-project") {
+  if (act.startsWith("cal-") || act === "ai-plan") {
+    e.preventDefault();
+    handleCalAction(act, el);
+    return;
+  }
+  if (act.startsWith("pj-") || act.startsWith("ms-") || act === "pji-open" || act === "pji-add-action" || act === "open-project" || act === "open-projects" || act === "new-project") {
     e.preventDefault();
     handleProjectAction(act, el);
     return;
@@ -1844,6 +2246,8 @@ function paletteActions() {
     { id: "new-project", label: "新規プロジェクト (EE / IA / TOK)", icon: "grid", run: () => openProjectEditor({ kind: "EE" }) },
     { id: "today", label: "今日へ移動", icon: "today", run: () => setView("today") },
     { id: "tasks", label: "タスクへ移動", icon: "tasks", run: () => setView("tasks") },
+    { id: "calendar", label: "カレンダーを開く", icon: "calendar", run: () => { state.taskMode = "calendar"; localStorage.setItem("sec_task_mode", "calendar"); setView("tasks"); } },
+    { id: "ai-plan", label: "AIに今日の計画を相談", icon: "spark", run: () => askAiPlan(ymd(new Date())) },
     { id: "projects", label: "プロジェクトへ移動", icon: "grid", run: () => setView("projects") },
     { id: "notes", label: "メモへ移動", icon: "notes", run: () => setView("notes") },
     { id: "settings", label: "設定を開く", icon: "settings", run: () => setView("settings") },

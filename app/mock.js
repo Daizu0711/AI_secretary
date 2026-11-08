@@ -123,6 +123,19 @@
       subject: "TOK", stage: "research", target_words: 1600, current_words: 350,
       supervisor: "Ms. Sato", feedback: "", due: at(5, 23, 59), archived: false,
       created_at: minsAgo(20000), updated_at: minsAgo(900),
+      ai_review: {
+        depth: 46,
+        verdict: "知識の問いは立てられているが、具体例と反論の往復がまだ弱い。TOKらしい「なぜそれを知識と呼べるか」の検討を足したい。",
+        strengths: ["問いが抽象的すぎず、議論の余地がある", "自分の立場を一度決めて書けている"],
+        gaps: ["具体例が1つしかなく、反対解釈の検討がない", "知識の定義と例の対応が曖昧", "語数が目標の1/4で、主張の厚みが足りない"],
+        actions: [
+          { title: "反対解釈の具体例を1つ書き、主張と衝突させる", minutes: 40, urgency: "now", why: "評価基準の反論パートに直結する" },
+          { title: "知識の定義を3行で書き直す", minutes: 30, urgency: "soon", why: "定義が曖昧なまま例を増やすと崩れる" },
+          { title: "指導者に問いの焦点を確認する", minutes: 15, urgency: "soon", why: "方向転換のコストを早く下げる" },
+        ],
+        questions: ["知識の定義はどの文献に依拠する?", "反論の例は自分の経験でよいか?", "語数の配分は主張:反論=6:4でよいか?"],
+      },
+      ai_review_at: minsAgo(300),
     },
     {
       id: "prj-math", user_id: "u1", kind: "IA", title: "数学 IA: 鳩の巣原理とグラフ彩色",
@@ -246,6 +259,29 @@
     functions: {
       async invoke(name, opts = {}) {
         const msg = String(opts?.body?.message || "");
+        if (name === "ai" && opts?.body?.purpose === "project_review") {
+          return {
+            data: {
+              text: "（モックの診断結果）",
+              provider: "gemini",
+              tried: [{ provider: "gemini", ok: true }],
+              proposals: [],
+              review: {
+                depth: 58,
+                verdict: "RQは焦点が良いが、方法の妥当性と限界の検討がまだ薄い。初稿までに変数の定義と統制条件を固めたい。",
+                strengths: ["RQが測定可能な形になっている", "先行研究の整理ができている", "語数は順調"],
+                gaps: ["独立変数と従属変数の操作定義がない", "温度以外の交絡因子(pH・基質濃度)の統制が未記述", "予備実験の結果がない", "限界と反論の節がない"],
+                actions: [
+                  { title: "方法セクションに操作定義と統制条件を書く", minutes: 45, urgency: "now", why: "初稿の前に方法が固まらないとデータが使えない" },
+                  { title: "予備実験を1回まわして結果を記録", minutes: 60, urgency: "soon", why: "データの有無で深度が変わる" },
+                  { title: "限界と反論の箇条書きを作る", minutes: 30, urgency: "soon", why: "評価基準のCriterion Cに入る" },
+                ],
+                questions: ["温度範囲は何度から何度まで?", "同じ酵素濃度で揃えているか?", "予備実験の結果は使えるか?"],
+              },
+            },
+            error: null,
+          };
+        }
         if (name === "ai") {
           if (/接続テスト|OK/.test(msg)) {
             return { data: { text: "OK", provider: "gemini", tried: [{ provider: "gemini", ok: true }], proposals: [] }, error: null };

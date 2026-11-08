@@ -23,6 +23,10 @@ create table if not exists public.sec_projects (
   updated_at    timestamptz not null default now()
 );
 
+-- AI診断の結果(JSON)と実行時刻。後から再実行しても安全。
+alter table public.sec_projects add column if not exists ai_review jsonb;
+alter table public.sec_projects add column if not exists ai_review_at timestamptz;
+
 create index if not exists sec_projects_user_idx on public.sec_projects (user_id, archived);
 create index if not exists sec_projects_due_idx  on public.sec_projects (user_id, due);
 
