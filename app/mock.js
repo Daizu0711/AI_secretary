@@ -111,8 +111,41 @@
     },
   ];
 
+  const seedProjects = [
+    {
+      id: "prj-ee", user_id: "u1", kind: "EE", title: "EE: 酵素の反応速度に対する温度の影響",
+      subject: "生物", stage: "outline", target_words: 4000, current_words: 1200,
+      supervisor: "Mr. Tanaka", feedback: "リサーチクエスチョンは良い。独立変数と従属変数の定義を方法に明記すること。",
+      due: at(12, 23, 59), archived: false, created_at: minsAgo(40000), updated_at: minsAgo(200),
+    },
+    {
+      id: "prj-tok", user_id: "u1", kind: "TOK", title: "TOK エッセイ: 知識と信念の境界",
+      subject: "TOK", stage: "research", target_words: 1600, current_words: 350,
+      supervisor: "Ms. Sato", feedback: "", due: at(5, 23, 59), archived: false,
+      created_at: minsAgo(20000), updated_at: minsAgo(900),
+    },
+    {
+      id: "prj-math", user_id: "u1", kind: "IA", title: "数学 IA: 鳩の巣原理とグラフ彩色",
+      subject: "数学", stage: "theme", target_words: 2500, current_words: 0,
+      supervisor: "", feedback: "", due: at(30, 23, 59), archived: false,
+      created_at: minsAgo(9000), updated_at: minsAgo(9000),
+    },
+  ];
+  const seedMilestones = [
+    { id: "ms1", user_id: "u1", project_id: "prj-ee", title: "先行研究を3本読む", due: at(-6, 23, 59), done: true, done_at: at(-6, 18, 0), sort: 1, created_at: minsAgo(39000) },
+    { id: "ms2", user_id: "u1", project_id: "prj-ee", title: "方法のアウトラインを書く", due: at(-1, 23, 59), done: true, done_at: at(-1, 20, 0), sort: 2, created_at: minsAgo(30000) },
+    { id: "ms3", user_id: "u1", project_id: "prj-ee", title: "実験計画を書く", due: at(2, 23, 59), done: false, done_at: null, sort: 3, created_at: minsAgo(30000) },
+    { id: "ms4", user_id: "u1", project_id: "prj-ee", title: "データ収集", due: at(6, 23, 59), done: false, done_at: null, sort: 4, created_at: minsAgo(30000) },
+    { id: "ms5", user_id: "u1", project_id: "prj-ee", title: "初稿を書き上げる", due: at(9, 23, 59), done: false, done_at: null, sort: 5, created_at: minsAgo(30000) },
+    { id: "ms6", user_id: "u1", project_id: "prj-tok", title: "知識の定義を整理", due: at(1, 23, 59), done: false, done_at: null, sort: 1, created_at: minsAgo(18000) },
+    { id: "ms7", user_id: "u1", project_id: "prj-tok", title: "具体例を3つ集める", due: at(3, 23, 59), done: false, done_at: null, sort: 2, created_at: minsAgo(18000) },
+    { id: "ms8", user_id: "u1", project_id: "prj-math", title: "題材を決める", due: at(3, 23, 59), done: false, done_at: null, sort: 1, created_at: minsAgo(8000) },
+  ];
+
   const db = {
     sec_items: seedItems.map(x => ({ ...x })),
+    sec_projects: seedProjects.map(x => ({ ...x })),
+    sec_milestones: seedMilestones.map(x => ({ ...x })),
     sec_memory: seedMemory.map(x => ({ ...x })),
     managebac_tasks: seedMb.map(x => ({ ...x })),
     sec_ics_tokens: [{ user_id: "u1", token: "demo-token-123" }],

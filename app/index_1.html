@@ -60,6 +60,7 @@
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
   <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14L21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
   <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
@@ -106,6 +107,9 @@
 
   <div id="main" class="main">
     <header id="topbar" class="topbar">
+      <button class="icon-btn back-btn" id="backBtn" type="button" aria-label="戻る" title="戻る" hidden>
+        <svg class="ic" aria-hidden="true"><use href="#i-arrow-left"/></svg>
+      </button>
       <div class="topbar-title">
         <h1 id="pageTitle">今日</h1>
         <span id="pageSub" class="topbar-sub"></span>
@@ -241,6 +245,60 @@
       <div class="sheet-foot-right">
         <button class="btn btn-ghost" id="edClose" type="button">キャンセル</button>
         <button class="btn btn-primary" id="edSave" type="submit">保存</button>
+      </div>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ===================== プロジェクト編集 ===================== -->
+<dialog id="pjEditor" class="sheet">
+  <form id="pjForm" novalidate>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <header class="sheet-head">
+      <h2 id="pjTitleLabel">新規プロジェクト</h2>
+      <button class="icon-btn" id="pjCancel" type="button" aria-label="閉じる">
+        <svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body">
+      <label class="field-label" for="pjTitle">タイトル</label>
+      <input class="field field-title" id="pjTitle" placeholder="例: 化学 IA — 酵素の反応速度" autocomplete="off">
+
+      <span class="field-label">種類</span>
+      <div class="seg" id="pjKind" role="group" aria-label="種類">
+        <button type="button" data-k="EE">EE</button>
+        <button type="button" data-k="IA">IA</button>
+        <button type="button" data-k="TOK">TOK</button>
+        <button type="button" data-k="OTHER">その他</button>
+      </div>
+
+      <label class="field-label" for="pjSubject">科目・分野</label>
+      <input class="field" id="pjSubject" placeholder="例: 化学 / 生物 / 歴史" autocomplete="off">
+
+      <div class="field-grid">
+        <div>
+          <label class="field-label" for="pjDue">提出期限</label>
+          <input class="field" id="pjDue" type="date">
+        </div>
+        <div>
+          <label class="field-label" for="pjTarget">目標語数</label>
+          <input class="field" id="pjTarget" type="number" min="0" step="100" inputmode="numeric" placeholder="4000">
+        </div>
+      </div>
+
+      <label class="field-label" for="pjSupervisor">指導者</label>
+      <input class="field" id="pjSupervisor" placeholder="任意" autocomplete="off">
+
+      <label class="switch-row">
+        <span><b>アーカイブ</b><small>一覧から隠します(記録は残ります)</small></span>
+        <input type="checkbox" id="pjArchived" class="switch">
+      </label>
+    </div>
+    <footer class="sheet-foot">
+      <span></span>
+      <div class="sheet-foot-right">
+        <button class="btn btn-ghost" id="pjClose" type="button">キャンセル</button>
+        <button class="btn btn-primary" id="pjSave" type="submit">保存</button>
       </div>
     </footer>
   </form>

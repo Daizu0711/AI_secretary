@@ -80,7 +80,8 @@ function greetingWord(h = new Date().getHours()) {
    2. 状態
 --------------------------------------------------------------------------- */
 const state = {
-  items: [], memory: [], userEmail: "",
+  items: [], memory: [], projects: [], userEmail: "",
+  projectId: null, projectFilter: "all", projectsMissing: false, projectsError: "",
   view: "today", listView: "today",
   taskFilter: "open", noteQuery: "", taskQuery: "", category: "",
   loaded: false, loading: false, loadError: "", lastSync: 0,
@@ -328,7 +329,7 @@ if (PREVIEW) {
     } else {
       state.userEmail = "";
       if (chan) { sb.removeChannel(chan); chan = null; }
-      state.items = []; state.memory = [];
+      state.items = []; state.memory = []; state.projects = []; state.projectId = null;
       if (authFlow) return;
       showLock();
     }
@@ -346,6 +347,7 @@ function cacheSave() {
       at: Date.now(),
       items: state.items.filter(i => !i.mb),
       memory: state.memory,
+      projects: state.projects,
     }));
   } catch {}
 }
@@ -354,6 +356,7 @@ function cacheLoad() {
     const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
     if (!c || !Array.isArray(c.items)) return false;
     state.items = c.items; state.memory = c.memory || [];
+    state.projects = Array.isArray(c.projects) ? c.projects : [];
     state.lastSync = c.at; state.loaded = true;
     return true;
   } catch { return false; }
@@ -398,7 +401,26 @@ async function loadMemory() {
   state.memory = data || [];
   if (state.view === "settings") refreshMemList();
 }
-async function loadAll() { await Promise.all([loadItems(), loadMemory()]); }
+async function loadProjects() {
+  const [rp, rm] = await Promise.all([
+    sb.from("sec_projects").select("*").order("created_at", { ascending: false }),
+    sb.from("sec_milestones").select("*").order("sort", { ascending: true }),
+  ]);
+  if (rp.error) {
+    state.projectsError = rp.error.message || "unknown";
+    state.projectsMissing = /relation|does not exist|schema cache|42P01/i.test(state.projectsError);
+    if (!state.projectsMissing) console.warn("projects:", state.projectsError);
+    return;
+  }
+  state.projectsError = "";
+  state.projectsMissing = false;
+  const ms = rm.data || [];
+  state.projects = (rp.data || []).map(p => ({
+    ...p,
+    milestones: ms.filter(m => m.project_id === p.id).sort((a, b) => (a.sort || 0) - (b.sort || 0)),
+  }));
+}
+async function loadAll() { await Promise.all([loadItems(), loadMemory(), loadProjects()]); }
 
 function subscribe() {
   if (chan || PREVIEW) return;
@@ -406,6 +428,8 @@ function subscribe() {
     .on("postgres_changes", { event: "*", schema: "public", table: "sec_items" }, () => loadItems())
     .on("postgres_changes", { event: "*", schema: "public", table: "sec_memory" }, () => loadMemory())
     .on("postgres_changes", { event: "*", schema: "public", table: "managebac_tasks" }, () => loadItems())
+    .on("postgres_changes", { event: "*", schema: "public", table: "sec_projects" }, () => loadProjects())
+    .on("postgres_changes", { event: "*", schema: "public", table: "sec_milestones" }, () => loadProjects())
     .subscribe();
 }
 
@@ -627,6 +651,7 @@ function skeletonHTML(n = 4) {
 const NAV = [
   { v: "today", label: "今日", icon: "today" },
   { v: "tasks", label: "タスク", icon: "tasks" },
+  { v: "projects", label: "プロジェクト", short: "PJ", icon: "grid" },
   { v: "notes", label: "メモ", icon: "notes" },
   { v: "chat", label: "秘書", icon: "chat" },
   { v: "settings", label: "設定", icon: "settings" },
@@ -640,7 +665,7 @@ function renderNav() {
     </button>`).join("");
   $("#tabbar").innerHTML = NAV.map(n => `
     <button type="button" data-view="${n.v}" class="${active(n.v)}" aria-label="${n.label}">
-      ${icon(n.icon)}<span>${n.label}</span>
+      ${icon(n.icon)}<span>${n.short || n.label}</span>
       ${["today", "tasks"].includes(n.v) ? `<i class="badge" data-badge="${n.v}" hidden></i>` : ""}
     </button>`).join("");
   $$("[data-view]").forEach(b => {
@@ -680,6 +705,8 @@ function setView(v) {
     }
     state.view = "chat";
   } else {
+    if (v === "projects" && state.view === "projects" && state.projectId) state.projectId = null;
+    if (v !== "projects") state.projectId = null;
     state.view = v;
     if (v !== "settings") state.listView = v;
   }
@@ -697,16 +724,23 @@ function renderApp() {
   const todaySub = st.total
     ? `${st.leftMin ? `残り ${fmtMin(st.leftMin)}` : "今日の分は完了"}${st.overdue ? ` · 期限切れ ${st.overdue}` : ""}`
     : (st.overdue ? `期限切れ ${st.overdue}` : "予定なし");
+  const activePj = state.projects.filter(p => !p.archived).length;
   const titles = {
     today: ["今日", todaySub],
     tasks: ["タスク", `${state.items.filter(i => i.kind === "task" && !i.done).length}件 未完了`],
+    projects: ["プロジェクト", `${activePj}件 進行中`],
     notes: ["メモ", `${state.items.filter(i => i.kind === "note").length}件`],
     settings: ["設定", "表示と動作の設定"],
     chat: ["秘書", "承認制アシスタント"],
   };
-  const t = titles[state.view] || titles.today;
+  const detailPj = state.view === "projects" && state.projectId
+    ? state.projects.find(p => p.id === state.projectId) : null;
+  const t = detailPj
+    ? [detailPj.title, `${kindLabel(detailPj.kind)} · ${STAGES[stageIndex(detailPj.stage)].label}`]
+    : (titles[state.view] || titles.today);
   $("#pageTitle").textContent = t[0];
   $("#pageSub").textContent = t[1];
+  $("#backBtn").hidden = !detailPj;
   document.title = `${t[0]} — AI秘書`;
   if (state.view === "settings") renderSettings();
   else renderList();
@@ -727,6 +761,7 @@ function renderList() {
   }
   if (state.view === "today") view.innerHTML = todayHTML();
   else if (state.view === "tasks") view.innerHTML = tasksHTML();
+  else if (state.view === "projects") view.innerHTML = state.projectId ? projectDetailHTML() : projectsHTML();
   else if (state.view === "notes") view.innerHTML = notesHTML();
   else if (state.view === "chat") view.innerHTML = "";
   bindList();
@@ -780,6 +815,21 @@ function nextTask() {
 function nextHTML() {
   const n = nextTask();
   if (!n.item) {
+    const pj = sortProjects(activeProjects())[0];
+    if (pj) {
+      const ms = nextMilestone(pj);
+      return `<section class="next">
+        <div class="next-top"><span class="next-label"><i></i>PROJECT</span><span class="next-count num">${projectProgress(pj)}%</span></div>
+        <div class="next-main">
+          <div class="next-time" style="font-size:34px">${esc(kindLabel(pj.kind))}</div>
+          <div class="next-info"><h2>${esc(pj.title)}</h2><p>${esc(STAGES[stageIndex(pj.stage)].label)}${ms ? ` · 次: ${esc(ms.title)}` : ""}${pj.due ? ` · ${esc(fmtDue(pj.due))}` : ""}</p></div>
+        </div>
+        <div class="next-acts">
+          <button class="btn btn-primary" data-act="pj-do" data-id="${pj.id}">${icon("play")}45分進める</button>
+          <button class="btn btn-ghost" data-act="open-project" data-id="${pj.id}">${icon("arrow-right")}開く</button>
+        </div>
+      </section>`;
+    }
     return `<section class="next"><div class="next-top"><span class="next-label"><i></i>NEXT UP</span></div>
       <div class="next-empty"><div><h2>${state.items.some(i => i.kind === "task" && !i.done) ? "今日はここまで" : "今日の予定はまだありません"}</h2><p>${state.items.some(i => i.kind === "task" && !i.done) ? "残りのタスクはありません。おつかれさまでした。" : "下の入力から追加するか、秘書に相談してみてください。"}</p></div></div>
       <div class="next-acts"><button class="btn btn-ghost btn-block" data-act="new-note">メモを残す</button></div></section>`;
@@ -797,8 +847,8 @@ function nextHTML() {
   return `<section class="next">
     <div class="next-top"><span class="next-label"><i></i>NEXT UP</span><span class="next-count num">${esc(count)}</span></div>
     <div class="next-main">
-      <div class="next-time">${start ? fmtClock(start).replace(":", "<small>:</small>") : "--<small>:</small>--"}</div>
-      <div class="next-info"><h2>${esc(it.title)}</h2><p>${start ? `${fmtClock(start)} – ${fmtClock(end)}` : ""}${sub ? ` · ${sub}` : ""}</p></div>
+      <div class="next-time"${start ? "" : ' style="font-size:30px"'}">${start ? fmtClock(start).replace(":", "<small>:</small>") : "未定"}</div>
+      <div class="next-info"><h2>${esc(it.title)}</h2><p>${[start ? `${fmtClock(start)} – ${fmtClock(end)}` : "今日中", sub].filter(Boolean).join(" · ")}</p></div>
     </div>
     <div class="next-acts">
       <button class="btn btn-primary" data-act="focus" data-id="${it.id}">${icon("play")}集中をはじめる</button>
@@ -960,6 +1010,7 @@ function todayHTML() {
       <div class="ring" style="--p:${st.pct}%" title="今日の達成率"><span>${st.pct}%</span></div>
     </div>
     ${nextHTML()}
+    ${todayProjectsHTML()}
     ${capacityHTML()}
     ${timelineHTML()}
     ${groupsHTML(state.items)}
@@ -1038,6 +1089,376 @@ function renderListArea() {
 }
 
 /* ---------------------------------------------------------------------------
+   10.5 プロジェクト (EE / IA / TOK) — 仕様書 §4.8
+--------------------------------------------------------------------------- */
+const STAGES = [
+  { k: "theme", label: "テーマ" },
+  { k: "research", label: "リサーチ" },
+  { k: "outline", label: "構成" },
+  { k: "draft", label: "初稿" },
+  { k: "feedback", label: "FB" },
+  { k: "revise", label: "改稿" },
+  { k: "final", label: "最終" },
+];
+const PJ_KINDS = ["EE", "IA", "TOK", "OTHER"];
+const kindLabel = k => k === "OTHER" ? "その他" : (k || "EE");
+const stageIndex = s => { const i = STAGES.findIndex(x => x.k === s); return i < 0 ? 0 : i; };
+const activeProjects = () => state.projects.filter(p => !p.archived);
+
+function projectProgress(p) {
+  const si = stageIndex(p.stage);
+  const stagePct = STAGES.length > 1 ? si / (STAGES.length - 1) : 0;
+  const wordsPct = p.target_words ? clamp((p.current_words || 0) / p.target_words, 0, 1) : 0;
+  const ms = p.milestones || [];
+  const msPct = ms.length ? ms.filter(m => m.done).length / ms.length : stagePct;
+  return clamp(Math.round((stagePct * 0.45 + wordsPct * 0.35 + msPct * 0.2) * 100), 0, 100);
+}
+function nextMilestone(p) {
+  return (p.milestones || []).filter(m => !m.done)
+    .sort((a, b) => (a.due || "9") > (b.due || "9") ? 1 : -1)[0] || null;
+}
+function sortProjects(list) {
+  return [...list].sort((a, b) => {
+    const ad = a.due ? +new Date(a.due) : Infinity;
+    const bd = b.due ? +new Date(b.due) : Infinity;
+    return ad - bd || projectProgress(a) - projectProgress(b);
+  });
+}
+function projectCardHTML(p) {
+  const prog = projectProgress(p);
+  const ms = nextMilestone(p);
+  const due = p.due ? new Date(p.due) : null;
+  const over = due && due < new Date();
+  return `<button class="project-card" type="button" data-act="open-project" data-id="${p.id}">
+    <div class="pj-top">
+      <span class="pj-kind ${p.kind === "OTHER" ? "other" : ""}">${esc(kindLabel(p.kind))}</span>
+      ${p.subject && p.subject !== kindLabel(p.kind) ? `<span class="pill gray">${esc(p.subject)}</span>` : ""}
+      <span class="pj-due ${over ? "over" : ""}">${due ? esc(fmtDue(p.due)) : "期限なし"}</span>
+    </div>
+    <div class="pj-title">${esc(p.title)}</div>
+    <div class="pj-sub">${esc(STAGES[stageIndex(p.stage)].label)}${p.target_words ? ` · ${p.current_words || 0} / ${p.target_words}語` : ""}</div>
+    <div class="pj-bar"><i style="width:${prog}%"></i></div>
+    <div class="pj-foot"><span>${ms ? `次: ${esc(ms.title)}` : "マイルストーンなし"}</span><b>${prog}%</b></div>
+    <div class="pj-next">${icon("arrow-right")}<span>${ms && ms.due ? `${fmtDue(ms.due)} まで` : "開いて進める"}</span></div>
+  </button>`;
+}
+function projectsHTML() {
+  const f = state.projectFilter;
+  const all = state.projects;
+  const list = all.filter(p => f === "archived" ? p.archived : (!p.archived && (f === "all" || p.kind === f)));
+  const filters = [["all", "すべて"], ["EE", "EE"], ["IA", "IA"], ["TOK", "TOK"], ["archived", "アーカイブ"]];
+  const chips = filters.map(([k, l]) =>
+    `<button class="chip ${f === k ? "on" : ""}" data-act="pj-filter" data-f="${k}">${l}</button>`).join("");
+
+  let body;
+  if (state.projectsMissing) {
+    body = `<div class="card pj-missing">
+      <h2 style="font-size:15px;margin-bottom:6px">プロジェクト管理を有効にする</h2>
+      <p class="desc" style="margin:0">Supabase の SQL Editor で <code>supabase/phase3.sql</code> を実行してください。
+      EE / IA / TOK のステージ・語数・マイルストーン・フィードバックが端末間で同期されます。</p>
+      <div class="addrow" style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-ghost btn-sm" data-act="pj-retry">再読み込み</button></div>
+    </div>`;
+  } else if (state.projectsError) {
+    body = `<div class="errbox"><span>プロジェクトを読み込めませんでした<br><span class="sub">${esc(state.projectsError)}</span></span><button class="btn btn-ghost btn-sm" data-act="pj-retry">再試行</button></div>`;
+  } else if (!list.length) {
+    body = emptyHTML(
+      f === "archived" ? "アーカイブはありません" : "プロジェクトはまだありません",
+      f === "archived" ? "完了したプロジェクトはここに残せます。" : "EE・IA・TOK の進捗、語数、マイルストーン、指導者フィードバックを1か所で管理できます。",
+      `<div class="chip-row" style="justify-content:center">
+        <button class="btn btn-ghost" data-act="new-project" data-kind="EE">EE をはじめる</button>
+        <button class="btn btn-ghost" data-act="new-project" data-kind="IA">IA をはじめる</button>
+        <button class="btn btn-ghost" data-act="new-project" data-kind="TOK">TOK をはじめる</button>
+      </div>`,
+      "grid");
+  } else {
+    body = `<div class="pj-grid">${sortProjects(list).map(projectCardHTML).join("")}</div>`;
+  }
+  return `<div class="pj-toolbar">
+      <div class="filter-row" style="flex:1">${chips}</div>
+    </div>${body}`;
+}
+function projectDetailHTML() {
+  const p = state.projects.find(x => x.id === state.projectId);
+  if (!p) return emptyHTML("プロジェクトが見つかりません", "一覧から選び直してください。", `<button class="btn btn-ghost" data-act="open-projects">一覧へ</button>`, "grid");
+  const prog = projectProgress(p);
+  const si = stageIndex(p.stage);
+  const ms = [...(p.milestones || [])].sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  const doneCount = ms.filter(m => m.done).length;
+  const wordsPct = p.target_words ? clamp((p.current_words || 0) / p.target_words, 0, 1) * 100 : 0;
+  const due = p.due ? new Date(p.due) : null;
+  const over = due && due < new Date();
+  const stages = STAGES.map((s, i) =>
+    `<button type="button" class="stage-step ${i < si ? "done" : ""} ${i === si ? "on" : ""}" data-act="pj-stage" data-id="${p.id}" data-stage="${s.k}">${i < si ? "✓ " : ""}${s.label}</button>`).join("");
+  const msRows = ms.map(m => {
+    const mod = m.due && new Date(m.due) < new Date() && !m.done;
+    return `<div class="msrow ${m.done ? "done" : ""}">
+      <button type="button" class="ms-check" data-act="ms-toggle" data-id="${m.id}" data-done="${m.done ? 0 : 1}" aria-label="${m.done ? "未完了に戻す" : "完了にする"}" aria-pressed="${m.done}"></button>
+      <span class="ms-title">${esc(m.title)}</span>
+      ${m.due ? `<span class="ms-due ${mod ? "over" : ""}">${esc(fmtDue(m.due))}</span>` : ""}
+      <button type="button" class="ms-del" data-act="ms-del" data-id="${m.id}" aria-label="マイルストーンを削除">${icon("trash")}</button>
+    </div>`;
+  }).join("") || `<div class="sub" style="padding:4px 0 2px">マイルストーンはまだありません。次の締切を小さく刻みましょう。</div>`;
+
+  return `<div class="pj-hero">
+      <div>
+        <div class="pj-kicker">
+          <span class="pj-kind ${p.kind === "OTHER" ? "other" : ""}">${esc(kindLabel(p.kind))}</span>
+          ${p.subject && p.subject !== kindLabel(p.kind) ? `<span>${esc(p.subject)}</span>` : ""}
+          ${due ? `<span class="${over ? "danger" : ""}">${over ? "期限切れ" : "期限"} ${esc(fmtDue(p.due))}</span>` : ""}
+        </div>
+        <h1>${esc(p.title)}</h1>
+        <div class="hero-meta">
+          <span class="pill gray">${esc(STAGES[si].label)}</span>
+          ${p.supervisor ? `<span class="pill gray">指導者 ${esc(p.supervisor)}</span>` : ""}
+          ${doneCount ? `<span class="pill ok">MS ${doneCount}/${ms.length}</span>` : ""}
+        </div>
+      </div>
+      <div class="ring" style="--p:${prog}%" title="進捗"><span>${prog}%</span></div>
+    </div>
+
+    <section class="card pj-section">
+      <h2>${icon("flag")}ステージ <span class="stage-count">${si + 1} / ${STAGES.length}</span></h2>
+      <div class="stage-track">${stages}</div>
+    </section>
+
+    <section class="card pj-section">
+      <h2>${icon("edit")}語数 <span class="stage-count">${p.target_words ? `${Math.round(wordsPct)}%` : "目標未設定"}</span></h2>
+      <div class="pj-words"><b id="pjWordsNow">${p.current_words || 0}</b><span>/ ${p.target_words ? p.target_words : "—"} 語</span></div>
+      <div class="pj-bar" style="margin-top:10px"><i style="width:${wordsPct}%"></i></div>
+      <div class="word-input">
+        <input class="field" id="pjWordsInput" type="number" min="0" step="50" inputmode="numeric" value="${p.current_words || 0}" aria-label="現在の語数">
+        <button type="button" class="btn btn-ghost btn-sm" data-act="pj-save-words" data-id="${p.id}">更新</button>
+        <button type="button" class="btn btn-quiet btn-sm" data-act="pj-words-add" data-id="${p.id}" data-n="100">+100</button>
+        <button type="button" class="btn btn-quiet btn-sm" data-act="pj-words-add" data-id="${p.id}" data-n="500">+500</button>
+      </div>
+    </section>
+
+    <section class="card pj-section">
+      <h2>${icon("check")}マイルストーン <span class="stage-count">${doneCount} / ${ms.length}</span></h2>
+      <div>${msRows}</div>
+      <div class="ms-add">
+        <input class="field" id="msTitle" placeholder="例: 実験計画を書く" autocomplete="off" aria-label="マイルストーン">
+        <input class="field" id="msDue" type="date" aria-label="期限">
+        <button type="button" class="btn btn-ghost btn-sm" data-act="ms-add" data-id="${p.id}">追加</button>
+      </div>
+    </section>
+
+    <section class="card pj-section">
+      <h2>${icon("chat")}フィードバック</h2>
+      <textarea class="pj-feedback" id="pjFeedback" placeholder="指導者からのコメント、次に直すこと、引用メモ">${esc(p.feedback || "")}</textarea>
+      <div class="pj-actions" style="margin-top:8px">
+        <button type="button" class="btn btn-ghost btn-sm" data-act="pj-save-feedback" data-id="${p.id}">保存</button>
+      </div>
+    </section>
+
+    <div class="pj-actions">
+      <button type="button" class="btn btn-primary" data-act="pj-do" data-id="${p.id}">${icon("play")}今日やる(45分)</button>
+      <button type="button" class="btn btn-ghost" data-act="pj-edit" data-id="${p.id}">${icon("edit")}編集</button>
+      <button type="button" class="btn btn-danger-ghost" data-act="pj-delete" data-id="${p.id}">削除</button>
+    </div>
+    <div class="sub" style="text-align:center;margin-top:14px">作成 ${new Date(p.created_at || Date.now()).toLocaleDateString("ja-JP")}${p.updated_at ? ` · 更新 ${new Date(p.updated_at).toLocaleDateString("ja-JP")}` : ""}</div>`;
+}
+function todayProjectsHTML() {
+  if (state.projectsMissing) return "";
+  const list = sortProjects(activeProjects()).slice(0, 3);
+  if (!list.length) return "";
+  return `<section class="card pj-today" style="margin-bottom:16px">
+    <div class="tl-head"><b>プロジェクト</b><span>${activeProjects().length}件</span><button class="qbtn" data-act="open-projects">すべて</button></div>
+    ${list.map(p => {
+      const prog = projectProgress(p);
+      const ms = nextMilestone(p);
+      return `<button type="button" class="pj-mini" data-act="open-project" data-id="${p.id}">
+        <div class="pj-mini-top">
+          <span class="pj-kind ${p.kind === "OTHER" ? "other" : ""}">${esc(kindLabel(p.kind))}</span>
+          <span class="pj-mini-title">${esc(p.title)}</span>
+          <span class="pj-mini-pct">${prog}%</span>
+        </div>
+        <div class="pj-bar"><i style="width:${prog}%"></i></div>
+        <div class="pj-mini-meta"><span>${esc(STAGES[stageIndex(p.stage)].label)}</span>${ms ? `<span>· 次: ${esc(ms.title)}</span>` : ""}${p.due ? `<span>· ${esc(fmtDue(p.due))}</span>` : ""}</div>
+      </button>`;
+    }).join("")}
+  </section>`;
+}
+
+/* ---------- プロジェクト編集シート ---------- */
+let pjEditState = null;
+function openProjectEditor(p = {}) {
+  if ($("#pjEditor").open) return;
+  pjEditState = { ...p };
+  $("#pjTitleLabel").textContent = p.id ? "プロジェクトを編集" : "新規プロジェクト";
+  $("#pjTitle").value = p.title || "";
+  $("#pjSubject").value = p.subject || "";
+  $("#pjDue").value = p.due ? toLocalInput(p.due).slice(0, 10) : "";
+  $("#pjTarget").value = p.target_words ?? "";
+  $("#pjSupervisor").value = p.supervisor || "";
+  $("#pjArchived").checked = !!p.archived;
+  $$("#pjKind [data-k]").forEach(b => b.classList.toggle("on", (b.dataset.k) === (p.kind || "EE")));
+  $("#pjEditor").showModal();
+  setTimeout(() => { try { $("#pjTitle").focus(); } catch {} }, 80);
+}
+async function saveProjectEditor() {
+  if (!pjEditState) return;
+  const title = $("#pjTitle").value.trim();
+  if (!title) { toast("タイトルを入力してください"); $("#pjTitle").focus(); return; }
+  const kind = $("#pjKind [data-k].on")?.dataset.k || "EE";
+  const rec = {
+    title, kind,
+    subject: $("#pjSubject").value.trim(),
+    due: toIso($("#pjDue").value),
+    target_words: $("#pjTarget").value ? parseInt($("#pjTarget").value, 10) : null,
+    supervisor: $("#pjSupervisor").value.trim(),
+    archived: $("#pjArchived").checked,
+  };
+  const editing = pjEditState.id;
+  let newId = null;
+  if (editing) {
+    const { error } = await sb.from("sec_projects").update(rec).eq("id", editing);
+    if (error) { toast(error.message, 3500); return; }
+  } else {
+    const { data, error } = await sb.from("sec_projects").insert({ ...rec, stage: "theme", current_words: 0 }).select().single();
+    if (error) { toast(error.message, 3500); return; }
+    newId = data.id;
+  }
+  $("#pjEditor").close();
+  await loadProjects();
+  if (newId) {
+    state.projectId = newId;
+    state.view = "projects";
+  }
+  renderApp();
+  view.scrollTop = 0;
+  toast(editing ? "保存しました" : "プロジェクトを作成しました");
+}
+$$("#pjKind [data-k]").forEach(b => b.onclick = () => {
+  $$("#pjKind [data-k]").forEach(x => x.classList.toggle("on", x === b));
+});
+$("#pjForm").addEventListener("submit", e => { e.preventDefault(); saveProjectEditor(); });
+$("#pjCancel").onclick = () => $("#pjEditor").close();
+$("#pjClose").onclick = () => $("#pjEditor").close();
+$("#pjEditor").addEventListener("close", () => { pjEditState = null; });
+
+/* ---------- 今日やる ---------- */
+async function projectDo(id) {
+  const p = state.projects.find(x => x.id === id);
+  if (!p) return;
+  const ms = nextMilestone(p);
+  const title = `${kindLabel(p.kind)}: ${ms ? ms.title : p.title}`.slice(0, 90);
+  const { data, error } = await sb.from("sec_items").insert({
+    kind: "task", title,
+    category: p.subject || kindLabel(p.kind),
+    est_minutes: 45,
+    due: endOfDay().toISOString(),
+    body: `${p.title} を進める${ms ? ` / 次のマイルストーン: ${ms.title}` : ""}`,
+  }).select().single();
+  if (error) { toast(error.message, 3500); return; }
+  await loadItems();
+  const it = state.items.find(x => x.id === data.id);
+  if (it) startFocus(it, 45);
+}
+
+/* ---------- プロジェクト操作 ---------- */
+async function handleProjectAction(act, el) {
+  const id = el.dataset.id || state.projectId;
+  const p = state.projects.find(x => x.id === id);
+  switch (act) {
+    case "open-projects": setView("projects"); return;
+    case "new-project": openProjectEditor({ kind: el.dataset.kind || "EE" }); return;
+    case "open-project":
+      state.view = "projects"; state.projectId = id; app.dataset.view = "projects";
+      renderApp(); view.scrollTop = 0; return;
+    case "pj-filter": state.projectFilter = el.dataset.f || "all"; renderList(); return;
+    case "pj-retry": await loadProjects(); renderApp(); return;
+    case "pj-edit": if (p) openProjectEditor(p); return;
+    case "pj-stage": {
+      if (!p) return;
+      const stage = el.dataset.stage;
+      const { error } = await sb.from("sec_projects").update({ stage }).eq("id", p.id);
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects(); renderApp();
+      const now = STAGES[stageIndex(stage)].label;
+      toast(`ステージを「${now}」にしました`, 2000);
+      return;
+    }
+    case "pj-save-words": {
+      if (!p) return;
+      const v = Math.max(0, parseInt($("#pjWordsInput")?.value || "0", 10) || 0);
+      const { error } = await sb.from("sec_projects").update({ current_words: v }).eq("id", p.id);
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects(); renderApp();
+      toast("語数を更新しました", 2000);
+      return;
+    }
+    case "pj-words-add": {
+      if (!p) return;
+      const n = parseInt(el.dataset.n || "0", 10) || 0;
+      const typed = parseInt($("#pjWordsInput")?.value || "", 10);
+      const base = Number.isFinite(typed) ? typed : (p.current_words || 0);
+      const v = Math.max(0, base + n);
+      const { error } = await sb.from("sec_projects").update({ current_words: v }).eq("id", p.id);
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects(); renderApp();
+      return;
+    }
+    case "ms-add": {
+      if (!p) return;
+      const title = ($("#msTitle")?.value || "").trim();
+      if (!title) { $("#msTitle")?.focus(); return; }
+      const due = toIso($("#msDue")?.value || "");
+      const sort = (p.milestones || []).reduce((a, m) => Math.max(a, m.sort || 0), 0) + 1;
+      const { error } = await sb.from("sec_milestones").insert({ project_id: p.id, title, due, sort }).select().single();
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects(); renderApp();
+      return;
+    }
+    case "ms-toggle": {
+      const done = el.dataset.done === "1";
+      const { error } = await sb.from("sec_milestones").update({ done, done_at: done ? new Date().toISOString() : null }).eq("id", el.dataset.id);
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects(); renderApp();
+      return;
+    }
+    case "ms-del": {
+      const m = (p?.milestones || []).find(x => x.id === el.dataset.id);
+      const { error } = await sb.from("sec_milestones").delete().eq("id", el.dataset.id);
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects(); renderApp();
+      if (m) toast("マイルストーンを削除しました", 5000, {
+        label: "元に戻す",
+        fn: async () => {
+          const { created_at, ...rest } = m;
+          await sb.from("sec_milestones").insert(rest);
+          await loadProjects(); renderApp();
+        },
+      });
+      return;
+    }
+    case "pj-save-feedback": {
+      if (!p) return;
+      const feedback = $("#pjFeedback")?.value || "";
+      const { error } = await sb.from("sec_projects").update({ feedback }).eq("id", p.id);
+      if (error) { toast(error.message, 3000); return; }
+      await loadProjects();
+      toast("フィードバックを保存しました", 2000);
+      return;
+    }
+    case "pj-do": if (p) await projectDo(p.id); return;
+    case "pj-delete": {
+      if (!p) return;
+      const ok = await confirmAsk("プロジェクトを削除しますか?", `「${p.title}」とマイルストーンを削除します。`, "削除");
+      if (!ok) return;
+      await sb.from("sec_milestones").delete().eq("project_id", p.id);
+      const { error } = await sb.from("sec_projects").delete().eq("id", p.id);
+      if (error) { toast(error.message, 3500); return; }
+      state.projectId = null;
+      await loadProjects(); renderApp();
+      toast("削除しました");
+      return;
+    }
+    default: return;
+  }
+}
+
+/* ---------------------------------------------------------------------------
    11. リストのイベント
 --------------------------------------------------------------------------- */
 function bindList() {
@@ -1064,11 +1485,34 @@ function bindList() {
     if (s) s.addEventListener("input", () => { state.noteQuery = s.value; renderListArea(); });
   }
   if (state.view === "tasks" || state.view === "notes") renderListArea();
+  if (state.view === "projects" && state.projectId) {
+    const activeStage = document.querySelector(".stage-step.on");
+    if (activeStage) {
+      const track = activeStage.parentElement;
+      const left = activeStage.offsetLeft;
+      const right = left + activeStage.offsetWidth;
+      if (left - 8 < track.scrollLeft) track.scrollLeft = Math.max(0, left - 8);
+      else if (right + 8 > track.scrollLeft + track.clientWidth) track.scrollLeft = right + 8 - track.clientWidth;
+    }
+    const msTitle = $("#msTitle");
+    if (msTitle) msTitle.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        const btn = document.querySelector('[data-act="ms-add"]');
+        if (btn) handleProjectAction("ms-add", btn);
+      }
+    });
+  }
 }
 view.addEventListener("click", async e => {
   const el = e.target.closest("[data-act]");
   if (!el) return;
   const act = el.dataset.act;
+  if (act.startsWith("pj-") || act.startsWith("ms-") || act === "open-project" || act === "open-projects" || act === "new-project") {
+    e.preventDefault();
+    handleProjectAction(act, el);
+    return;
+  }
   if (act === "retry") { state.loadError = ""; state.loaded = false; loadItems(); return; }
   if (act === "focus-quick") { const q = $("#quick"); if (q) q.focus(); return; }
   if (act === "new-note") { openEditor({ kind: "note" }); return; }
@@ -1397,8 +1841,10 @@ function paletteActions() {
   const acts = [
     { id: "new-task", label: "新規タスク", icon: "plus", hint: "N", run: () => openEditor({ kind: "task" }) },
     { id: "new-note", label: "新規メモ", icon: "notes", run: () => openEditor({ kind: "note" }) },
+    { id: "new-project", label: "新規プロジェクト (EE / IA / TOK)", icon: "grid", run: () => openProjectEditor({ kind: "EE" }) },
     { id: "today", label: "今日へ移動", icon: "today", run: () => setView("today") },
     { id: "tasks", label: "タスクへ移動", icon: "tasks", run: () => setView("tasks") },
+    { id: "projects", label: "プロジェクトへ移動", icon: "grid", run: () => setView("projects") },
     { id: "notes", label: "メモへ移動", icon: "notes", run: () => setView("notes") },
     { id: "settings", label: "設定を開く", icon: "settings", run: () => setView("settings") },
     { id: "focus", label: "集中モードをはじめる", icon: "play", run: () => startFocus(nextTask().item) },
@@ -1424,10 +1870,17 @@ function renderPalette(q) {
   const items = state.items
     .filter(i => q && matchQuery(i, q))
     .slice(0, 8);
+  const projects = state.projects
+    .filter(p => q && [p.title, p.subject, kindLabel(p.kind)].join(" ").toLowerCase().includes(q))
+    .slice(0, 4);
   const list = [];
   if (actions.length) {
     list.push(`<div class="pal-group">コマンド</div>`);
     actions.forEach(a => list.push(`<button type="button" class="pal-item" data-type="act" data-id="${a.id}">${icon(a.icon)}<span>${esc(a.label)}</span>${a.hint ? `<span class="pal-sub"><kbd>${a.hint}</kbd></span>` : ""}</button>`));
+  }
+  if (projects.length) {
+    list.push(`<div class="pal-group">プロジェクト</div>`);
+    projects.forEach(p => list.push(`<button type="button" class="pal-item" data-type="project" data-id="${p.id}">${icon("grid")}<span>${esc(p.title)}</span><span class="pal-kind">${esc(kindLabel(p.kind))}</span><span class="pal-sub">${projectProgress(p)}%</span></button>`));
   }
   if (items.length) {
     list.push(`<div class="pal-group">タスクとメモ</div>`);
@@ -1455,6 +1908,9 @@ function runPaletteItem(el) {
   if (el.dataset.type === "act") {
     const a = paletteActions().find(x => x.id === id);
     if (a) a.run();
+  } else if (el.dataset.type === "project") {
+    state.view = "projects"; state.projectId = id;
+    renderApp(); view.scrollTop = 0;
   } else {
     const it = state.items.find(x => x.id === id);
     if (it) { if (it.mb) { it.url && window.open(it.url, "_blank", "noopener"); } else openEditor(it); }
@@ -2249,7 +2705,19 @@ if (PREVIEW && "serviceWorker" in navigator) {
 --------------------------------------------------------------------------- */
 $("#themeBtn").onclick = cycleTheme;
 $("#searchBtn").onclick = openPalette;
-$("#newBtn").onclick = () => openEditor({ kind: "task" });
+function newForCurrentView() {
+  if (state.view === "projects") {
+    if (state.projectsMissing) { toast("先に supabase/phase3.sql を実行してください", 4500); return; }
+    if (state.projectsError) { toast("プロジェクトを読み込めていません", 3000); return; }
+    const p = state.projectId ? state.projects.find(x => x.id === state.projectId) : null;
+    openProjectEditor(p || { kind: "EE" });
+    return;
+  }
+  if (state.view === "notes") { openEditor({ kind: "note" }); return; }
+  openEditor({ kind: "task" });
+}
+$("#newBtn").onclick = newForCurrentView;
+$("#backBtn").onclick = () => { state.projectId = null; renderApp(); view.scrollTop = 0; };
 $("#chatToggle").onclick = () => {
   app.dataset.chat = app.dataset.chat === "off" ? "on" : "off";
   if (app.dataset.chat === "on") setTimeout(() => $("#q").focus(), 60);
@@ -2263,7 +2731,7 @@ addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
   if (typing) return;
   if (e.key === "/") { e.preventDefault(); openPalette(); return; }
-  if (e.key === "n" || e.key === "N") { e.preventDefault(); openEditor({ kind: "task" }); return; }
+  if (e.key === "n" || e.key === "N") { e.preventDefault(); newForCurrentView(); return; }
   if (e.key === "Escape") {
     if ($("#palette").open) $("#palette").close();
     else if (!focusHidden()) finishFocus();

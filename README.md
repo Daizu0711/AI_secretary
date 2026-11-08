@@ -2,7 +2,7 @@
 
 仕様は `AI秘書アプリ 仕様書 v1.txt` を参照(仕様確定済み)。
 
-自分専用のAI秘書PWA。**今日の計画・タスク・メモ・課題(ManageBac)・相談**を、ひとつの画面で扱う。
+自分専用のAI秘書PWA。**今日の計画・タスク・メモ・課題(ManageBac)・EE/IA/TOK・相談**を、ひとつの画面で扱う。
 v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザインシステム + モジュール構成へ)。
 
 | iPhone | Mac |
@@ -10,6 +10,8 @@ v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザイン�
 | <img src="docs/preview-mobile.jpg" width="280" alt="iPhoneの今日ビュー"> | <img src="docs/preview-desktop.jpg" width="720" alt="Macの3ペイン表示"> |
 
 ※ 画像はモックデータのプレビュー(`?preview=1`)。
+
+<img src="docs/preview-projects.jpg" width="820" alt="プロジェクト一覧(EE / IA / TOK)">
 
 ## v2 の変更点
 
@@ -23,7 +25,8 @@ v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザイン�
 - **コマンドパレット** — `⌘K` / `Ctrl+K` / `/`。タスク・メモの横断検索、各画面への移動、新規作成、計画の組み直し、テーマ切替などをキーボードだけで実行
 - **自然言語クイック追加** — `明日15時 化学レポート #化学 45分` のように書くだけで、期限・見積り・カテゴリ・優先度を解釈。入力中に解釈結果をプレビュー
 - **編集シート** — モバイルはボトムシート、デスクトップはダイアログ。優先度・実績・AI非公開フラグを編集
-- **チャット** — マークダウン表示、コピー/読み上げ、構造化された提案カード、複数提案の一括適用、適用後の「元に戻す」
+- **プロジェクト** — EE / IA / TOK のステージ(テーマ→リサーチ→構成→初稿→FB→改稿→最終)、語数、マイルストーン、指導者フィードバックを1画面で管理。進捗はステージ・語数・マイルストーンから自動計算
+- **チャット** — マークダウン表示、コピー/読み上げ、構造化した提案カード、複数提案の一括適用、適用後の「元に戻す」
 - **レスポンシブ** — iPhone: 1画面 + 下タブ / iPad: アイコンレール + 2ペイン / Mac: サイドバー + 2ペイン(チャット開閉)
 - 空状態・スケルトン・オフラインバナー・トースト(元に戻す)を統一
 
@@ -35,6 +38,7 @@ v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザイン�
 - **オフライン閲覧** — 直近の同期結果をローカルにキャッシュ。通信できないときはキャッシュを表示
 - **PWA** — `manifest.webmanifest` / Service Worker / アイコン。ホーム画面に追加でき、アプリシェルはオフラインでも起動する
 - **今日ビューに今後7日** — 未来の課題(ManageBac含む)を見落とさない
+- **プロジェクトから今日の計画へ** — 「今日やる(45分)」でタスクを作り、そのまま集中モードへ。プロジェクトは今日のNEXT UPとカードにも表示
 
 ## 構成
 
@@ -42,11 +46,13 @@ v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザイン�
 |---|---|
 | `app/index_1.html` | PWAのシェル(マークアップ)。GitHub Pagesでは `index.html` として公開 |
 | `app/app.css` | デザインシステム(トークン、レイアウト、コンポーネント、ロック画面) |
-| `app/app.js` | アプリ本体(認証、データ、自動計画、集中モード、チャット、設定、PWA) |
+| `app/app.js` | アプリ本体(認証、データ、自動計画、集中モード、プロジェクト、チャット、設定、PWA) |
 | `app/mock.js` | ローカル確認用のSupabaseモック。`?preview=1` のときだけ読み込まれる(本番では未使用) |
 | `app/manifest.webmanifest` / `app/sw.js` / `app/icons/` | PWA(インストール・オフライン) |
 | `.github/workflows/pages.yml` | `app/` をGitHub Pagesへデプロイ(`index_1.html`→トップページ) |
 | `supabase/schema.sql` | `sec_*` テーブル + 共有 `managebac_*` テーブルのスキーマ(RLS付き)。SQL Editorで実行 |
+| `supabase/phase2.sql` | 既存DB向けの冪等マイグレーション(タイムライン列、GCal、iCal、RLS修復) |
+| `supabase/phase3.sql` | プロジェクト管理(`sec_projects` / `sec_milestones`)の追加。実行するとPJタブが有効になる |
 | `supabase/functions/ai/` | AIルーター Edge Function。Gemini → NIM → Hermes(チャット/計画)、NIM → Gemini(課題ヒント)。承認制propose_*ツール + `sec_ai_log` 記録付き |
 | `managebac auto/` | ManageBac 非公式スクレイパー + Supabase同期 |
 | `.github/workflows/managebac-sync.yml` | 数時間おきの自動取り込み(GitHub Actions) |
@@ -62,15 +68,16 @@ python3 -m http.server 8765
 ```
 
 - `?preview=1` は **localhost / 127.0.0.1 のときだけ**有効。本番URLでは通常どおりログイン画面になる
-- モックのタスク・メモ・ManageBac課題・AI応答(提案カード付き)が入っている
+- モックのタスク・メモ・プロジェクト(EE/IA/TOK)・ManageBac課題・AI応答(提案カード付き)が入っている
 - `app/index.html` は廃止した(ビルド時に `index_1.html` から生成される)
 - Service Worker のキャッシュは `app/sw.js` の `VERSION` で管理している。フロントを更新したら
   この値を上げる(古いアプリシェルが残るのを防ぐ)。SWは https / localhost でのみ登録される
 
 ## セットアップ
 
-1. Supabase プロジェクトを作成し、`supabase/schema.sql` → `supabase/phase2.sql` の順に SQL Editor で実行
-   (既存DBがある場合も phase2.sql は冪等なので安全に再実行できる)
+1. Supabase プロジェクトを作成し、`supabase/schema.sql` → `supabase/phase2.sql` → `supabase/phase3.sql` の順に SQL Editor で実行
+   (既存DBがある場合も phase2 / phase3 は冪等なので安全に再実行できる。phase3 を実行するまでPJタブは
+   「phase3.sql を実行してください」という案内を表示する)
 2. 自分のアカウントを作成したら **新規登録をOFF** にする(仕様書 §3)
 3. PWAをデプロイ: リポジトリの Settings → Pages → Source を **GitHub Actions** にする。
    以降 `main` への `app/` 変更pushで自動デプロイされる(手動はActionsの pages → Run workflow)
@@ -148,6 +155,8 @@ ManageBacの自動取り込みは3時間おき。失敗時は `managebac_import_
 - 今日の「使える時間」チップ: 押すとその枠で計画を組み直す
 - タスクの`集中をはじめる`: 終了時に実測時間が記録される(見積り学習に使われる)
 - 自然言語: `明日15時 化学 #化学 45分`、`来週月曜 数学 1時間`、`週末 模試 3時間`
+- PJタブ: ステージを押す / 語数を更新 / マイルストーンを追加。「今日やる(45分)」で集中開始
+- プロジェクトは今日のNEXT UPとカードにも出る(タスクが無いときは「45分進める」が先頭)
 - 設定 → 外観: テーマ・アクセント・密度・モーション
 - 設定 → ホーム画面に追加: 対応ブラウザでインストール
 
