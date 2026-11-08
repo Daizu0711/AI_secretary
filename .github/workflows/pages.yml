@@ -30,7 +30,8 @@ jobs:
       - name: Build site (index_1.html をトップページの index.html にする)
         run: |
           mkdir -p site
-          cp app/* site/
+          cp -R app/. site/
+          rm -f site/index_1.html site/.DS_Store site/icons/.DS_Store
           cp app/index_1.html site/index.html
           touch site/.nojekyll
           ls -la site
