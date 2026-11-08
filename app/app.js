@@ -449,6 +449,8 @@ function subscribe() {
    6. 計画エンジン
 --------------------------------------------------------------------------- */
 const PLAN_DAYS = 10;
+const BREAK_MIN = 10;
+const MIN_BLOCK = 15;
 
 function defaultCap() {
   const v = parseInt(localStorage.getItem(CAP_KEY) || "180", 10);
@@ -468,7 +470,7 @@ function setCapacity(min) {
 }
 function planWindows(day) {
   const w = day.getDay();
-  return (w === 0 || w === 6) ? [[9 * 60, 12 * 60], [13 * 60, 18 * 60]] : [[16 * 60, 22 * 60]];
+  return (w === 0 || w === 6) ? [[9 * 60, 12 * 60], [13 * 60, 18 * 60], [19 * 60, 22 * 60]] : [[16 * 60, 22 * 60]];
 }
 function planCap(day) {
   const w = day.getDay();
@@ -481,7 +483,7 @@ function slotIn(blocks, est, from, to) {
   let s = from;
   for (const b of sorted) {
     if (s + est <= b.s) return s;
-    if (s < b.e) s = b.e + 10;
+    if (s < b.e) s = b.e + BREAK_MIN;
   }
   return s + est <= to ? s : null;
 }
@@ -510,6 +512,108 @@ function estFactorMap() {
   return out;
 }
 
+const estMinutes = i => Math.max(5, Math.round(i.est_minutes || 30));
+function dueDays(iso, now = new Date()) {
+  if (!iso) return null;
+  return Math.round((startOfDay(iso) - startOfDay(now)) / 864e5);
+}
+function projectForTask(i) {
+  return state.projects.find(p => !p.archived && (
+    (p.subject && i.category && p.subject === i.category) ||
+    (i.body && p.title && i.body.includes(p.title))
+  ));
+}
+function taskScore(i, { now = new Date(), free = null } = {}) {
+  if (!i || i.done || i.mb || isStale(i)) return -Infinity;
+  let score = 0;
+  const days = dueDays(i.due, now);
+  if (days == null) score += 8;
+  else if (days < 0) score += 80 + Math.max(-15, days + 3); // 1日前=82, 30日前=65
+  else if (days === 0) score += 95;
+  else if (days === 1) score += 75;
+  else if (days <= 3) score += 60;
+  else if (days <= 7) score += 45;
+  else if (days <= 30) score += 25;
+  else score += 10;
+  score += (i.priority || 0) * 10;
+  const est = estMinutes(i);
+  if (free != null && free > 0) {
+    if (est <= free) score += 12;
+    else score -= 15;
+  }
+  if (est <= 15) score += 5;
+  else if (est <= 25) score += 3;
+  else if (est >= 90) score -= 3;
+  const pj = projectForTask(i);
+  if (pj) {
+    score += 6;
+    const pd = dueDays(pj.due, now);
+    if (pd != null && pd >= 0 && pd <= 7) score += 10;
+    else if (pd != null && pd < 0) score += 8;
+    if (projectProgress(pj) < 50) score += 4;
+  }
+  return score;
+}
+function taskReasons(i, free = null, now = new Date()) {
+  const out = [];
+  const days = dueDays(i.due, now);
+  if (days != null) {
+    if (days < 0) out.push(`期限切れ${-days}日`);
+    else if (days === 0) out.push("今日が期限");
+    else if (days <= 2) out.push(`あと${days}日`);
+  }
+  if ((i.priority || 0) >= 2) out.push("優先度高");
+  else if ((i.priority || 0) === 1) out.push("優先度中");
+  const pj = projectForTask(i);
+  if (pj) out.push(`${pj.kind}の続き`);
+  const est = estMinutes(i);
+  if (free != null && free >= 15) {
+    if (est <= free) out.push(`空き${fmtMin(free)}に合う`);
+    else out.push(`空き${fmtMin(free)}では足りない`);
+  }
+  if (est <= 20) out.push(`${est}分`);
+  return out.slice(0, 3);
+}
+function isLateScheduled(i) {
+  if (!i || !i.due || !i.scheduled_start) return false;
+  const s = new Date(i.scheduled_start);
+  const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + estMinutes(i) * 60000);
+  return e.getTime() > new Date(i.due).getTime() + 60000;
+}
+
+function freeMinutesNow(now = new Date()) {
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const win = planWindows(now).find(([s, e]) => mins >= s && mins < e);
+  if (!win) return 0;
+  const blocks = plannedToday().filter(i => !i.done).map(i => {
+    const s = new Date(i.scheduled_start);
+    const sm = s.getHours() * 60 + s.getMinutes();
+    const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + estMinutes(i) * 60000);
+    const em = e.getHours() * 60 + e.getMinutes();
+    return { s: sm, e: em };
+  }).sort((a, b) => a.s - b.s);
+  if (blocks.some(b => b.s <= mins && mins < b.e)) return 0;
+  const next = blocks.find(b => b.s > mins);
+  const end = next ? Math.min(next.s, win[1]) : win[1];
+  return Math.max(0, end - mins - 5);
+}
+function todayCandidates(limit = 4, { now = new Date(), free } = {}) {
+  const f = free === undefined ? freeMinutesNow(now) : free;
+  const s = startOfDay(now), e = endOfDay(now);
+  const pool = visibleItems().filter(i => {
+    if (i.kind !== "task" || i.done || i.mb) return false;
+    if (i.scheduled_start) {
+      const d = new Date(i.scheduled_start);
+      if (d > e && !(i.due && new Date(i.due) <= e)) return false;
+    }
+    return true;
+  });
+  return pool.map(item => ({ item, score: taskScore(item, { now, free: f }) }))
+    .filter(x => Number.isFinite(x.score))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
 async function autoPlan({ manual = false, silent = false } = {}) {
   if (state.planning || !state.loaded) return;
   if (!manual && Date.now() - state.planAt < 10 * 60 * 1000) return;
@@ -523,24 +627,28 @@ async function autoPlan({ manual = false, silent = false } = {}) {
   state.planAt = Date.now();
   const factors = estFactorMap();
   const today = startOfDay();
+  const now = new Date();
   const ordered = [...open].sort((a, b) => {
-    const ad = a.due ? new Date(a.due) : null, bd = b.due ? new Date(b.due) : null;
-    if (ad && bd && +ad !== +bd) return ad - bd;
-    if (!!ad !== !!bd) return ad ? -1 : 1;
-    if ((a.priority || 0) !== (b.priority || 0)) return (b.priority || 0) - (a.priority || 0);
-    return (b.est_minutes || 30) - (a.est_minutes || 30);
+    const sa = taskScore(a, { now }), sb = taskScore(b, { now });
+    if (sa !== sb) return sb - sa;
+    const ad = a.due ? +new Date(a.due) : Infinity, bd = b.due ? +new Date(b.due) : Infinity;
+    if (ad !== bd) return ad - bd;
+    return estMinutes(b) - estMinutes(a);
   });
 
   const days = new Map();
   const plan = [];
-  const now = new Date();
 
   for (const t of ordered) {
     const f = factors[(t.category || "").trim()] || 1;
     const est = clamp(Math.round((t.est_minutes || 30) * f), 10, 240);
     const due = t.due ? new Date(t.due) : null;
     const duePast = due && due < now;
-    const lastDay = due && !duePast ? startOfDay(due) : addDays(today, 7);
+    // 期限切れ・今日締切は今日〜2日以内に寄せる。未来の期限は期限日まで、期限なしは1週間以内。
+    const dueDay = due ? startOfDay(due) : null;
+    const lastDay = duePast ? addDays(today, 2)
+      : dueDay && dueDay > today ? dueDay
+      : addDays(today, 2);
     let placed = null;
     for (let d = 0; d < PLAN_DAYS; d++) {
       const day = addDays(today, d);
@@ -548,12 +656,12 @@ async function autoPlan({ manual = false, silent = false } = {}) {
       const key = ymd(day);
       let st = days.get(key);
       if (!st) { st = { used: 0, blocks: [] }; days.set(key, st); }
-      if (st.used + est > planCap(day) || st.blocks.length >= 4) continue;
+      if (st.used + est > planCap(day) || st.blocks.length >= 5) continue;
       for (const [ws, we] of planWindows(day)) {
         let from = ws, to = we;
-        if (sameDay(day, now)) from = Math.max(from, now.getHours() * 60 + now.getMinutes() + 15);
+        if (sameDay(day, now)) from = Math.max(from, now.getHours() * 60 + now.getMinutes() + 10);
         if (due && !duePast && sameDay(day, due)) to = Math.min(to, due.getHours() * 60 + due.getMinutes() - 5);
-        if (to - from < Math.min(est, 20)) continue;
+        if (to - from < Math.max(MIN_BLOCK, Math.min(est, 20))) continue;
         const start = slotIn(st.blocks, est, from, to);
         if (start != null) { placed = { day, start, end: start + est, key }; break; }
       }
@@ -808,21 +916,59 @@ function todayStat() {
 function nextTask() {
   const now = new Date();
   const planned = plannedToday().filter(i => !i.done);
+  const free = freeMinutesNow(now);
   const live = planned.find(i => {
     const s = new Date(i.scheduled_start);
-    const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + (i.est_minutes || 30) * 60000);
+    const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + estMinutes(i) * 60000);
     return s <= now && now < e;
   });
-  if (live) return { item: live, live: true };
+  if (live) return { item: live, live: true, free, reasons: ["進行中", ...taskReasons(live, free, now)].slice(0, 3), alts: [] };
+  const missed = planned.filter(i => new Date(i.scheduled_start) < now)
+    .sort((a, b) => new Date(b.scheduled_start) - new Date(a.scheduled_start))[0];
+  if (missed) {
+    return {
+      item: missed, free, missed: true,
+      reasons: ["予定を過ぎています", ...taskReasons(missed, free, now)].slice(0, 3),
+      alts: [],
+    };
+  }
   const next = planned.find(i => new Date(i.scheduled_start) > now);
-  if (next) return { item: next, live: false };
-  const s = startOfDay(), e = endOfDay();
-  const dueToday = visibleItems().filter(i => i.kind === "task" && !i.done && i.due &&
-    new Date(i.due) >= s && new Date(i.due) <= e && !plannedToday().some(p => p.id === i.id));
-  if (dueToday.length) return { item: dueToday.sort((a, b) => new Date(a.due) - new Date(b.due))[0], unscheduled: true };
-  const over = visibleItems().filter(i => i.kind === "task" && !i.done && i.due && new Date(i.due) < s);
-  if (over.length) return { item: over.sort((a, b) => new Date(a.due) - new Date(b.due))[0], overdue: true };
-  return { item: null };
+  const minsTo = next ? Math.round((new Date(next.scheduled_start) - now) / 60000) : null;
+  const cands = todayCandidates(5, { now, free });
+  // 今日の予定は「次の予定」として尊重。今日以外の予定(明日以降)は前倒し候補にする。
+  const notToday = cands.filter(c => {
+    const s = c.item.scheduled_start ? new Date(c.item.scheduled_start) : null;
+    return !s || !sameDay(s, now);
+  });
+  const bestEntry = notToday[0] || null;
+  const best = bestEntry?.item || null;
+  const bestScore = bestEntry?.score ?? -Infinity;
+  const nextScore = next ? taskScore(next, { now, free }) : -Infinity;
+  const alts = (list, exclude) => list.filter(c => c.item.id !== exclude?.id).slice(0, 2).map(c => c.item);
+
+  // 45分以内に始まる予定は尊重。遠い場合は、今の空きに合う未配置タスクを優先する。
+  if (next && (minsTo <= 45 || !best || bestScore < nextScore - 5)) {
+    return {
+      item: next, free, next: true,
+      reasons: ["次の予定", ...taskReasons(next, free, now)].slice(0, 3),
+      alts: alts(cands, next),
+    };
+  }
+  if (best) {
+    const future = best.scheduled_start && new Date(best.scheduled_start) > now;
+    const reasons = [future ? "予定を前倒し" : "", ...taskReasons(best, free, now)].filter(Boolean).slice(0, 3);
+    return { item: best, unscheduled: !best.scheduled_start, preponed: future, free, reasons, alts: alts(cands, best) };
+  }
+  if (next) return { item: next, free, next: true, reasons: ["次の予定"], alts: [] };
+  const fallback = cands[0]?.item;
+  if (fallback) {
+    return {
+      item: fallback, free, missed: true,
+      reasons: ["予定を過ぎています", ...taskReasons(fallback, free, now)].slice(0, 3),
+      alts: alts(cands, fallback),
+    };
+  }
+  return { item: null, free };
 }
 function nextHTML() {
   const n = nextTask();
@@ -852,16 +998,21 @@ function nextHTML() {
   const minsTo = start ? Math.round((start - new Date()) / 60000) : null;
   let count = "";
   if (n.live) count = "進行中";
+  else if (n.preponed) count = "前倒し";
+  else if (n.missed) count = "予定超過";
   else if (minsTo != null && minsTo > 0) count = minsTo < 60 ? `あと${minsTo}分` : `あと${fmtMin(minsTo)}`;
-  else if (n.overdue) count = "期限切れ";
-  else if (n.unscheduled) count = "時間未定";
-  const sub = [it.category, it.est_minutes ? `${it.est_minutes}分` : "", it.mb ? "ManageBac" : ""].filter(Boolean).map(esc).join(" · ");
+  else if (n.unscheduled) count = "今日やる";
+  else count = "次の予定";
+  const sub = [it.category, `${estMinutes(it)}分`, it.mb ? "ManageBac" : ""].filter(Boolean).map(esc).join(" · ");
+  const alts = n.alts || [];
   return `<section class="next">
     <div class="next-top"><span class="next-label"><i></i>NEXT UP</span><span class="next-count num">${esc(count)}</span></div>
     <div class="next-main">
       <div class="next-time"${start ? "" : ' style="font-size:30px"'}">${start ? fmtClock(start).replace(":", "<small>:</small>") : "未定"}</div>
       <div class="next-info"><h2>${esc(it.title)}</h2><p>${[start ? `${fmtClock(start)} – ${fmtClock(end)}` : "今日中", sub].filter(Boolean).join(" · ")}</p></div>
     </div>
+    ${(n.reasons || []).length ? `<div class="next-reasons">${n.reasons.map(r => `<span class="pill">${esc(r)}</span>`).join("")}</div>` : ""}
+    ${alts.length ? `<div class="next-alts"><span>次点</span>${alts.map(a => `<button type="button" class="next-alt" data-act="focus" data-id="${a.id}" title="${esc(a.title)} を開始"><b>${esc(a.title)}</b><small>${a.scheduled_start ? (() => { const d = new Date(a.scheduled_start); return sameDay(d, new Date()) ? `${fmtClock(d)}〜` : `${d.getMonth() + 1}/${d.getDate()} ${fmtClock(d)}〜`; })() : `${estMinutes(a)}分`}</small></button>`).join("")}</div>` : ""}
     <div class="next-acts">
       <button class="btn btn-primary" data-act="focus" data-id="${it.id}">${icon("play")}集中をはじめる</button>
       <button class="btn btn-ghost" data-act="edit" data-id="${it.id}">${icon("edit")}詳細</button>
@@ -882,8 +1033,10 @@ function timelineHTML() {
     if (!marked && s > now) { rows += nowRow(); marked = true; }
     const live = !it.done && s <= now && now < e;
     const dur = Math.max(1, Math.round((e - s) / 60000));
+    const late = !it.done && isLateScheduled(it);
     const meta = [it.category, `${dur}分`];
     if (live) meta.push("進行中");
+    if (late) meta.push("期限超過");
     rows += `<div class="tl-row ${it.done ? "done" : ""} ${live ? "live" : ""}" data-id="${it.id}">
       <div class="tl-time"><b>${fmtClock(s)}</b>${fmtClock(e)}</div>
       <div class="tl-rail"><i></i></div>
@@ -896,13 +1049,16 @@ function timelineHTML() {
     prevEnd = e;
   }
   if (list.length && !marked) rows += nowRow();
-  const total = list.reduce((a, i) => {
+  const openList = list.filter(i => !i.done);
+  const doneCount = list.length - openList.length;
+  const total = openList.reduce((a, i) => {
     const s0 = new Date(i.scheduled_start);
     const e0 = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s0.getTime() + (i.est_minutes || 30) * 60000);
     return a + Math.round((e0 - s0) / 60000);
   }, 0);
+  const summary = [openList.length ? `${openList.length}件 · ${fmtMin(total)}` : "", doneCount ? `完了${doneCount}` : ""].filter(Boolean).join(" · ");
   return `<section class="timeline">
-    <div class="tl-head"><b>タイムライン</b><span>${list.length ? `${list.length}件 · ${fmtMin(total)}` : "未計画"}</span>
+    <div class="tl-head"><b>タイムライン</b><span>${summary || "未計画"}</span>
       <button class="icon-btn" data-act="replan" title="自動で組み直す" aria-label="計画を組み直す">${icon("refresh")}</button></div>
     ${rows || `<div class="tl-empty">まだ計画がありません<button class="chip" data-act="replan">組み直す</button></div>`}
   </section>`;
@@ -913,7 +1069,7 @@ function nowRow() {
 function capacityHTML() {
   const cap = todayCapacity();
   const opts = [[30, "30分"], [60, "1時間"], [120, "2時間"], [180, "3時間"], [240, "4時間+"]];
-  const planned = plannedToday().reduce((a, i) => {
+  const planned = plannedToday().filter(i => !i.done).reduce((a, i) => {
     const s0 = new Date(i.scheduled_start);
     const e0 = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s0.getTime() + (i.est_minutes || 30) * 60000);
     return a + Math.round((e0 - s0) / 60000);
@@ -1693,7 +1849,7 @@ function dayCapacity(day) {
 }
 function dayLoad(day) {
   const planned = visibleItems()
-    .filter(i => i.kind === "task" && i.scheduled_start && sameDay(new Date(i.scheduled_start), day))
+    .filter(i => i.kind === "task" && !i.done && i.scheduled_start && sameDay(new Date(i.scheduled_start), day))
     .reduce((a, i) => {
       const s = new Date(i.scheduled_start);
       const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + (i.est_minutes || 30) * 60000);
@@ -3206,5 +3362,5 @@ if (new URLSearchParams(location.search).get("gcal") === "connected") {
 }
 
 /* デバッグ用(コンソールから状態を確認) */
-window.__aiSecretary = { state, sb, loadAll, autoPlan, parseQuick };
+window.__aiSecretary = { state, sb, loadAll, autoPlan, parseQuick, nextTask, todayCandidates, taskScore, taskReasons, freeMinutesNow };
 })();
