@@ -31,13 +31,16 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
+// Secrets に説明文や日本語が誤って入っても、モデルIDとして妥当なものだけ使う。
+const MODEL_ID_RE = /^[a-z0-9][a-z0-9._\/-]*$/i;
+const validModelId = (s: string) => MODEL_ID_RE.test(s);
 // モデルは候補リストで持ち、404/退役なら次の候補へフォールバックする。
 // 2026年時点で gemini-2.x は退役しているため latest エイリアスを既定にする。
 // GEMINI_MODEL を設定した場合は先頭になる。GEMINI_MODELS でカンマ区切りに候補追加可。
 const GEMINI_MODELS = [
   ...(Deno.env.get("GEMINI_MODEL") ? [Deno.env.get("GEMINI_MODEL")!] : []),
   ...(Deno.env.get("GEMINI_MODELS") ?? "gemini-flash-latest,gemini-pro-latest").split(","),
-].map((s) => s.trim()).filter(Boolean);
+].map((s) => s.trim()).filter((s) => s && validModelId(s));
 const NIM_API_KEY = Deno.env.get("NIM_API_KEY") ?? Deno.env.get("NVIDIA_API_KEY") ?? "";
 const NIM_BASE = (Deno.env.get("NIM_BASE") ?? "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
 // integrate.api.nvidia.com/v1/models で現存確認済みの候補
@@ -50,7 +53,7 @@ const NIM_MODELS = [
     "mistralai/mistral-large-4-1t-a52b",
     "deepseek-ai/deepseek-v4.1-flash",
   ].join(",")).split(","),
-].map((s) => s.trim()).filter(Boolean);
+].map((s) => s.trim()).filter((s) => s && validModelId(s));
 
 const CALL_TIMEOUT_MS = 25_000;
 const MAX_ROUNDS = 6;
@@ -69,7 +72,8 @@ const cors = {
 type Msg = { role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string; name?: string };
 type ToolCall = { id: string; name: string; args: Record<string, unknown> };
 type ProviderResult = { text: string; toolCalls: ToolCall[] };
-type Tried = { provider: string; ok: boolean };
+type Tried = { provider: string; ok: boolean; error?: string };
+const errMsg = (e: unknown) => String((e as Error)?.message ?? e).replace(/([?&]key=)[^&\s]+/gi, "$1[redacted]").slice(0, 300);
 
 // ---------- ツール定義(フロントエンドの applyProposal と名前を一致させる) ----------
 const TOOLS: { name: string; description: string; args: Record<string, string> }[] = [
@@ -321,7 +325,7 @@ async function callWithModels(p: "gemini" | "nim", models: string[], messages: M
       return r;
     } catch (e) {
       const modelDead = Boolean((e as { modelDead?: boolean }).modelDead);
-      tried.push({ provider: `${p}:${model}`, ok: false });
+      tried.push({ provider: `${p}:${model}`, ok: false, error: errMsg(e) });
       if (modelDead) continue; // 次のモデル候補へ
       throw e; // 429/タイムアウトなどは提供元の再試行へ
     }
@@ -342,7 +346,7 @@ async function callProvider(p: string, messages: Msg[], userId: string, purpose:
 async function route(purpose: string, messages: Msg[], userId: string, tried: Tried[], withTools = true): Promise<{ provider: string; result: ProviderResult } | null> {
   const order = purpose === "hint" ? ["nim", "gemini"] : ["gemini", "nim", "hermes"];
   for (const p of order) {
-    if (inCooldown(p)) { tried.push({ provider: p, ok: false }); continue; }
+    if (inCooldown(p)) { tried.push({ provider: p, ok: false, error: "cooldown" }); continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const r = await callProvider(p, messages, userId, purpose, tried, withTools);
@@ -350,7 +354,7 @@ async function route(purpose: string, messages: Msg[], userId: string, tried: Tr
         break; // キー未設定/全モデル退役/Hermesオフライン → 次へ
       } catch (e) {
         const code = (e as { code?: number }).code;
-        tried.push({ provider: p, ok: false });
+        tried.push({ provider: p, ok: false, error: errMsg(e) });
         if (code === 429 || (e as Error).name === "AbortError") {
           await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           continue;
@@ -453,11 +457,11 @@ Deno.serve(async (req) => {
       ];
       const routed = await route("chat", reviewMessages, user.id, tried, false);
       if (!routed) {
-        await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable" });
+        await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable", detail: { tried } });
         return Response.json({ error: "all AI providers unavailable (キー未設定またはクールダウン中)" }, { status: 503, headers: cors });
       }
       const review = normalizeReview(routed.result.text);
-      await logAi({ userId: user.id, provider: routed.provider, purpose, ok: true, detail: { depth: review?.depth ?? null } });
+      await logAi({ userId: user.id, provider: routed.provider, purpose, ok: true, detail: { depth: review?.depth ?? null, tried } });
       return Response.json({ text: routed.result.text, provider: routed.provider, tried, proposals: [], review }, { headers: cors });
     }
 
@@ -473,7 +477,7 @@ Deno.serve(async (req) => {
 
     const routed = await route(purpose, messages, user.id, tried);
     if (!routed) {
-      await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable" });
+      await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable", detail: { tried } });
       return Response.json({ error: "all AI providers unavailable (キー未設定またはクールダウン中)" }, { status: 503, headers: cors });
     }
     let provider = routed.provider;
@@ -493,7 +497,7 @@ Deno.serve(async (req) => {
     }
 
     const text = result.text || "(返答を生成できませんでした)";
-    await logAi({ userId: user.id, provider, purpose, ok: true, detail: { proposals: proposals.length } });
+    await logAi({ userId: user.id, provider, purpose, ok: true, detail: { proposals: proposals.length, tried } });
     return Response.json({ text, provider, tried, proposals }, { headers: cors });
   } catch (e) {
     await logAi({ userId: null, provider: "-", purpose: "error", ok: false, error: String(e) });
