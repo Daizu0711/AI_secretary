@@ -78,10 +78,10 @@ const errMsg = (e: unknown) => redactBody(String((e as Error)?.message ?? e)).sl
 
 // ---------- ツール定義(フロントエンドの applyProposal と名前を一致させる) ----------
 const TOOLS: { name: string; description: string; args: Record<string, string> }[] = [
-  { name: "list_items", description: "タスク/メモを読む。ai_hidden(AI非公開)の行は含まれない。計画・要約・進捗確認では必ず先にこれを呼ぶ。", args: { kind: "'task'|'note'|省略で全部", include_done: "boolean 省略で未完了のみ" } },
+  { name: "list_items", description: "タスク/メモを読み直す。systemに埋め込まれた最新データより新しい情報が必要なときだけ使う。", args: { kind: "'task'|'note'|省略で全部", include_done: "boolean 省略で未完了のみ" } },
   { name: "list_memory", description: "保存済みの記憶を読む。", args: {} },
   { name: "list_mb_tasks", description: "ManageBacから取り込んだ課題(managebac_tasks)を読む。今日の計画にはこれも含める。", args: { only_open: "boolean 省略で未完了のみ(Submitted/Complete系は除外)" } },
-  { name: "list_projects", description: "EE/IA/TOKのプロジェクトとマイルストーンを読む。優先順位・今日やるべきこと・進度の相談では必ず読む。", args: { include_archived: "boolean 省略で除外" } },
+  { name: "list_projects", description: "EE/IA/TOKのプロジェクトとマイルストーンを読み直す。systemより新しい情報が必要なときだけ使う。", args: { include_archived: "boolean 省略で除外" } },
   { name: "propose_add_task", description: "タスク追加の提案(承認されるまで追加しない)", args: { title: "string 必須", due: "ISO8601|null", est_minutes: "number|null 見積り分", category: "string", notes: "string" } },
   { name: "propose_add_note", description: "メモ追加の提案", args: { title: "string 必須", body: "string", category: "string" } },
   { name: "propose_update_item", description: "既存タスク/メモの更新提案", args: { id: "string 必須", title: "string?", body: "string?", category: "string?", est_minutes: "number?", due: "ISO8601?" } },
@@ -94,14 +94,17 @@ const TOOLS: { name: string; description: string; args: Record<string, string> }
 
 const SYSTEM_PROMPT = `あなたはユーザー専属のAI秘書です。日本語で簡潔に答えます。
 ルール:
-- タスク/メモについて答える前に、必ず list_items / list_memory で実データを読んでから答えること。
+- systemメッセージの【現在の登録データ(最新)】に、ユーザーのタスク・ManageBac課題・プロジェクト・記憶の実データが入っている。これを事実として扱い、最優先で参照すること。
+- 「データがありません」「一件もありません」と答えてよいのは、【現在の登録データ(最新)】の該当欄が「なし」のときだけ。ツールを呼んでいないことを理由にデータが無いと判断してはいけない。
+- ツール(list_items / list_mb_tasks / list_projects など)は、systemの内容より新しい情報が必要なときだけ使う。既に書かれている内容を確認するためだけに呼ぶ必要はない。
 - 追加・更新・完了・削除・記憶の保存は propose_* ツールで「提案」だけを出すこと。適用はユーザーの承認後にアプリが行う。
-- list_items には ai_hidden(AI非公開)の項目は含まれない。見えないデータがある前提で勝手な推測をしないこと。
-- 今日の計画・優先順位の相談では、list_items と list_mb_tasks、必要なら list_projects を読み、期限・est_minutes・scheduled_start・プロジェクトの進度を踏まえて具体的に答えること。
-- EE/IA/TOKの進度や「今どれを優先するか」の相談では list_projects を読み、締切・ステージ・語数・未完了マイルストーンから判断すること。
+- ai_hidden(AI非公開)の項目はsystemにもツールにも含まれない。見えないデータがある前提で勝手な推測をしないこと。
+- 今日の計画・優先順位の相談では、期限・見積り・scheduled_start・プロジェクトの進度を踏まえて具体的に答えること。
+- EE/IA/TOKの進度や「今どれを優先するか」の相談では、締切・ステージ・語数・未完了マイルストーンから判断すること。
 - 期限が30日以上前の未完了タスクは、ユーザーが明示的に「古いタスク」を求めた場合を除き、計画・提案・優先順位に含めないこと。
 - est_minutes が無いタスクは、種別・内容・過去の実績から完了時間を推定し、propose_estimate で提案すること。
 - 「いつやるか」の割り当ては propose_schedule で scheduled_start/scheduled_end を提案すること(承認後にタイムラインへ反映される)。
+- 何も無い場合は、勝手に課題を作らず「今登録されているタスクはありません。追加しますか?」と確認すること。
 - EE/IA/TOKなどの本文の代筆はしない。構成案・論点・質問・次の一歩までにすること。`;
 
 const PROJECT_REVIEW_PROMPT = `あなたはIBのEE / IA / TOKを指導する経験豊富なスーパーバイザーです。生徒の本文を代筆せず、診断と次の一歩に集中します。
@@ -418,6 +421,75 @@ function failureText(tried: Tried[]): string {
     : "all AI providers unavailable (キー未設定またはクールダウン中)";
 }
 
+function contextDate(v: string | null, tz?: string): string {
+  if (!v) return "なし";
+  try {
+    return new Date(v).toLocaleString("ja-JP", {
+      timeZone: tz || "Asia/Tokyo", month: "numeric", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch { return String(v); }
+}
+
+async function buildContext(sb: ReturnType<typeof serviceClient>, userId: string, tz?: string) {
+  const q = async (p: PromiseLike<{ data: unknown[] | null }>) => {
+    try { return await p; } catch { return { data: null }; }
+  };
+  const [itemsR, mbR, pjR, msR, memR] = await Promise.all([
+    q(sb.from("sec_items")
+      .select("id,title,due,category,est_minutes,priority,scheduled_start")
+      .eq("user_id", userId).eq("kind", "task").eq("done", false).eq("ai_hidden", false)
+      .order("due", { ascending: true, nullsFirst: false }).limit(40)),
+    q(sb.from("managebac_tasks")
+      .select("task_id,class_name,title,due,due_iso,status")
+      .not("status", "in", '("Submitted","Complete","Excused")')
+      .order("due_iso", { ascending: true, nullsFirst: false }).limit(30)),
+    q(sb.from("sec_projects")
+      .select("id,kind,title,subject,stage,target_words,current_words,due")
+      .eq("user_id", userId).eq("archived", false)
+      .order("due", { ascending: true, nullsFirst: false }).limit(15)),
+    q(sb.from("sec_milestones")
+      .select("project_id,title,due,done")
+      .eq("user_id", userId).eq("done", false).limit(60)),
+    q(sb.from("sec_memory").select("text").eq("user_id", userId).limit(30)),
+  ]);
+  const items = (itemsR.data ?? []) as Array<Record<string, unknown>>;
+  const mb = (mbR.data ?? []) as Array<Record<string, unknown>>;
+  const projects = (pjR.data ?? []) as Array<Record<string, unknown>>;
+  const milestones = (msR.data ?? []) as Array<Record<string, unknown>>;
+  const memory = (memR.data ?? []) as Array<Record<string, unknown>>;
+
+  const lines: string[] = [];
+  lines.push(`【タスク(未完了) ${items.length}件】`);
+  if (items.length) {
+    for (const i of items) {
+      lines.push(`- id=${i.id} / ${i.title} / 期限:${contextDate(i.due as string | null, tz)} / 見積:${i.est_minutes ?? "?"}分 / カテゴリ:${i.category ?? ""} / 優先度:${i.priority ?? 0} / 予定:${contextDate(i.scheduled_start as string | null, tz)}`);
+    }
+  } else lines.push("- なし");
+  lines.push(`【ManageBac(未提出) ${mb.length}件】`);
+  if (mb.length) {
+    for (const m of mb) {
+      lines.push(`- ${m.class_name ?? ""} / ${m.title} / 期限:${contextDate((m.due_iso ?? m.due) as string | null, tz)} / ${m.status ?? ""}`);
+    }
+  } else lines.push("- なし");
+  lines.push(`【プロジェクト ${projects.length}件】`);
+  if (projects.length) {
+    for (const p of projects) {
+      const ms = milestones.filter((m) => String(m.project_id) === String(p.id));
+      const next = ms[0];
+      lines.push(`- id=${p.id} / ${p.kind} / ${p.title} / stage:${p.stage} / 語数:${p.current_words ?? 0}/${p.target_words ?? "?"} / 期限:${contextDate(p.due as string | null, tz)} / 次のMS:${next ? `${next.title}(${contextDate(next.due as string | null, tz)})` : "なし"}`);
+    }
+  } else lines.push("- なし");
+  lines.push(`【記憶 ${memory.length}件】`);
+  if (memory.length) for (const m of memory) lines.push(`- ${m.text}`);
+  else lines.push("- なし");
+
+  return {
+    text: lines.join("\n").slice(0, 14000),
+    counts: { tasks: items.length, mb: mb.length, projects: projects.length, memory: memory.length },
+  };
+}
+
 let lastProbeAt = 0;
 
 // ---------- ハンドラ ----------
@@ -518,13 +590,16 @@ Deno.serve(async (req) => {
     }
 
     const history: Msg[] = Array.isArray(body.history) ? body.history : [];
+    const sb = serviceClient();
+    const ctx = await buildContext(sb, user.id, body.tz);
+    const systemContent = SYSTEM_PROMPT
+      + (nowCtx ? `\n現在時刻: ${nowCtx}` : "")
+      + `\n\n【現在の登録データ(最新)】\n${ctx.text}\n※上記を最優先で参照し、必要ならツールで再確認すること。`;
     const messages: Msg[] = [
-      { role: "system", content: SYSTEM_PROMPT + (nowCtx ? `\n現在時刻: ${nowCtx}` : "") },
+      { role: "system", content: systemContent },
       ...history,
       { role: "user", content: String(body.message ?? "") },
     ];
-
-    const sb = serviceClient();
     const proposals: { tool: string; args: Record<string, unknown> }[] = [];
 
     const routed = await route(purpose, messages, user.id, tried);
@@ -554,7 +629,7 @@ Deno.serve(async (req) => {
       cooldownUntil.delete("gemini");
       cooldownUntil.delete("nim");
       const plain: Msg[] = [
-        { role: "system", content: SYSTEM_PROMPT + (nowCtx ? `\n現在時刻: ${nowCtx}` : "") },
+        { role: "system", content: systemContent },
         ...history,
         { role: "user", content: String(body.message ?? "") },
       ];
@@ -566,7 +641,7 @@ Deno.serve(async (req) => {
       }
     }
     text = text || "(返答を生成できませんでした)";
-    await logAi({ userId: user.id, provider, purpose, ok: true, detail: { proposals: proposals.length, tried } });
+    await logAi({ userId: user.id, provider, purpose, ok: true, detail: { proposals: proposals.length, tried, counts: ctx.counts } });
     return Response.json({ text, provider, tried, proposals }, { headers: cors });
   } catch (e) {
     await logAi({ userId: null, provider: "-", purpose: "error", ok: false, error: String(e) });
