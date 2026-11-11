@@ -5,6 +5,8 @@
 //   Request : { message, history:[{role,content}], tz, now, purpose? }
 //             purpose="project_review" のときは { project, answers } を渡すと
 //             { review:{depth,verdict,strengths,gaps,actions,questions} } を返す
+//             purpose="score_tasks" のときは { tasks:[...] } を渡すと
+//             { scoring:{items:[{id,est_minutes,difficulty,importance,day_offset,reason}],summary} } を返す
 //   Response: { text, provider, tried:[{provider,ok}], proposals:[{tool,args}] }
 //             または { error }
 //
@@ -119,6 +121,30 @@ const PROJECT_REVIEW_PROMPT = `あなたはIBのEE / IA / TOKを指導する経�
   "questions": ["次回の指導者・先生に確認すべきこと最大3つ"]
 }
 actions は最大4つ、合計が今日〜3日で実行できる粒度にすること。urgency は締切と到達度から判断する。`;
+
+const SCORING_PROMPT = `あなたはIBの学習計画を支援する専門家です。渡されたタスク/課題の一覧について、それぞれの「所要時間」「難易度」「重要度」を推定し、締切から逆算して「いつやるか」を振り分けます。
+本文の代筆はしません。推定と振り分けだけを行います。
+必ず次のJSONだけを返してください。前後に説明文やコードフェンスを付けないこと。値はすべて日本語にすること。
+{
+  "items": [
+    {
+      "id": "渡されたidをそのまま",
+      "est_minutes": 15〜240の整数(実際に手を動かす時間。休憩は含めない),
+      "difficulty": 1〜5の整数(1=単純作業, 3=標準, 5=概念理解や構成が必要),
+      "importance": 1〜5の整数(5=評価に直結/締切厳守, 1=後回しにできる),
+      "day_offset": 0〜7の整数(今日から何日後にやるか。今日=0),
+      "reason": "推定の根拠を40字程度で"
+    }
+  ],
+  "summary": "全体の振り分け方針を2〜3文で"
+}
+振り分けのルール:
+- 締切が今日・明日のものは day_offset を 0〜1 にする。締切を過ぎたものは 0(今日)にする。
+- 難易度が高い(4〜5)ものは、締切に余裕があっても前倒しして早めの日に置く。
+- 1日の合計が 120〜180分を超えないように日を分ける。同じ日には難易度5を2つ以上置かない。
+- 締切がないものは、空いている日に分散させる。
+- 同じプロジェクトのタスクは近い日にまとめてよい。
+- id は必ず入力のidを使い、勝手に作らない。`;
 
 // ---------- Supabase ----------
 function serviceClient() {
@@ -386,6 +412,28 @@ function extractJson(text: string): Record<string, unknown> | null {
     return v && typeof v === "object" ? v as Record<string, unknown> : null;
   } catch { return null; }
 }
+function normalizeScoring(text: string) {
+  const raw = extractJson(text);
+  if (!raw) return null;
+  const arr = Array.isArray(raw.items) ? raw.items : [];
+  const clampInt = (v: unknown, lo: number, hi: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : null;
+  };
+  const items = arr.map((it) => {
+    const o = (it ?? {}) as Record<string, unknown>;
+    return {
+      id: String(o.id ?? ""),
+      est_minutes: clampInt(o.est_minutes, 5, 240),
+      difficulty: clampInt(o.difficulty, 1, 5),
+      importance: clampInt(o.importance, 1, 5),
+      day_offset: clampInt(o.day_offset, 0, 7),
+      reason: String(o.reason ?? "").slice(0, 200),
+    };
+  }).filter((x) => x.id && x.est_minutes != null);
+  return { items, summary: String(raw.summary ?? "").slice(0, 600) };
+}
+
 function normalizeReview(text: string) {
   const raw = extractJson(text);
   if (!raw) return null;
@@ -571,6 +619,29 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const purpose: string = body.purpose ?? "chat";
     const nowCtx = [body.now, body.tz ? `タイムゾーン: ${body.tz}` : ""].filter(Boolean).join(" / ");
+
+    if (purpose === "score_tasks") {
+      const tasks = Array.isArray(body.tasks) ? body.tasks.slice(0, 60) : [];
+      if (!tasks.length) {
+        return Response.json({ error: "no tasks to score" }, { status: 400, headers: cors });
+      }
+      const scoreMessages: Msg[] = [
+        { role: "system", content: SCORING_PROMPT + (nowCtx ? `\n現在時刻: ${nowCtx}` : "") },
+        { role: "user", content: JSON.stringify({ tasks }, null, 1).slice(0, 16000) },
+      ];
+      const routed = await route("chat", scoreMessages, user.id, tried, false);
+      if (!routed) {
+        await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable", detail: { tried } });
+        return Response.json({ error: failureText(tried), tried }, { status: 503, headers: cors });
+      }
+      const scoring = normalizeScoring(routed.result.text);
+      await logAi({
+        userId: user.id, provider: routed.provider, purpose, ok: !!scoring,
+        error: scoring ? undefined : "invalid scoring json",
+        detail: { scored: scoring?.items.length ?? 0, tried },
+      });
+      return Response.json({ text: routed.result.text, provider: routed.provider, tried, proposals: [], scoring }, { headers: cors });
+    }
 
     if (purpose === "project_review") {
       const project = body.project ?? {};

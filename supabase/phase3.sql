@@ -27,6 +27,18 @@ create table if not exists public.sec_projects (
 alter table public.sec_projects add column if not exists ai_review jsonb;
 alter table public.sec_projects add column if not exists ai_review_at timestamptz;
 
+-- ---------- sec_items: AIスコアリング(所要時間・難易度・重要度) ----------
+-- ai_* はAIが推定した値、難易度/重要度は1〜5。ユーザーが手で直した値(est_minutes/priority)を優先する。
+alter table public.sec_items add column if not exists ai_score jsonb;
+alter table public.sec_items add column if not exists ai_score_at timestamptz;
+alter table public.sec_items add column if not exists difficulty integer;
+alter table public.sec_items add column if not exists importance integer;
+alter table public.sec_items add column if not exists scored_at timestamptz;
+alter table public.sec_items add column if not exists plan_day date;
+
+create index if not exists sec_items_plan_day_idx on public.sec_items (user_id, plan_day);
+create index if not exists sec_items_scored_idx   on public.sec_items (user_id, scored_at);
+
 create index if not exists sec_projects_user_idx on public.sec_projects (user_id, archived);
 create index if not exists sec_projects_due_idx  on public.sec_projects (user_id, due);
 
