@@ -73,7 +73,8 @@ type Msg = { role: string; content: string; tool_calls?: unknown[]; tool_call_id
 type ToolCall = { id: string; name: string; args: Record<string, unknown> };
 type ProviderResult = { text: string; toolCalls: ToolCall[] };
 type Tried = { provider: string; ok: boolean; error?: string };
-const errMsg = (e: unknown) => String((e as Error)?.message ?? e).replace(/([?&]key=)[^&\s]+/gi, "$1[redacted]").slice(0, 300);
+const redactBody = (t: string) => String(t ?? "").replace(/([?&]key=)[^&\s"']+/gi, "$1[redacted]").slice(0, 800);
+const errMsg = (e: unknown) => redactBody(String((e as Error)?.message ?? e)).slice(0, 300);
 
 // ---------- ツール定義(フロントエンドの applyProposal と名前を一致させる) ----------
 const TOOLS: { name: string; description: string; args: Record<string, string> }[] = [
@@ -406,12 +407,60 @@ function normalizeReview(text: string) {
   };
 }
 
+function failureText(tried: Tried[]): string {
+  const failed = tried.filter((t) => !t.ok && t.provider !== "hermes").slice(-6);
+  const detail = failed.map((t) => `${t.provider}: ${t.error ?? "failed"}`).join(" / ");
+  return detail
+    ? `all AI providers unavailable — ${detail}`
+    : "all AI providers unavailable (キー未設定またはクールダウン中)";
+}
+
+let lastProbeAt = 0;
+
 // ---------- ハンドラ ----------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
   if (req.method === "GET") {
     const u = new URL(req.url);
     // 診断: 実際に使えるモデル一覧をプロバイダから取得 (キーがあれば)
+    if (u.searchParams.get("action") === "probe") {
+      // 一時診断: 各プロバイダに最小リクエストを投げ、生の status/body を返す。
+      // 乱用防止のため同一isolateで10秒に1回まで。
+      if (Date.now() - lastProbeAt < 10_000) {
+        return Response.json({ error: "probe rate limited" }, { status: 429, headers: cors });
+      }
+      lastProbeAt = Date.now();
+      const out: Record<string, unknown> = { at: new Date().toISOString() };
+      const gModel = GEMINI_MODELS[0] ?? "gemini-flash-latest";
+      const nModel = NIM_MODELS[0] ?? "";
+      if (GEMINI_API_KEY) {
+        try {
+          const r = await fetchWithTimeout(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(gModel)}:generateContent?key=${GEMINI_API_KEY}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: "Reply with OK only." }] }],
+                generationConfig: { maxOutputTokens: 8 },
+              }),
+            },
+          );
+          out.gemini = { model: gModel, status: r.status, ok: r.ok, body: redactBody(await r.text()) };
+        } catch (e) { out.gemini = { model: gModel, error: errMsg(e) }; }
+      } else out.gemini = { error: "no key" };
+      if (NIM_API_KEY) {
+        try {
+          const r = await fetchWithTimeout(`${NIM_BASE}/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${NIM_API_KEY}` },
+            body: JSON.stringify({ model: nModel, messages: [{ role: "user", content: "Reply with OK only." }], max_tokens: 8 }),
+          });
+          out.nim = { model: nModel, status: r.status, ok: r.ok, body: redactBody(await r.text()) };
+        } catch (e) { out.nim = { model: nModel, error: errMsg(e) }; }
+      } else out.nim = { error: "no key" };
+      return Response.json(out, { headers: cors });
+    }
     if (u.searchParams.get("action") === "models") {
       const out: Record<string, unknown> = { candidates: { gemini: GEMINI_MODELS, nim: NIM_MODELS } };
       try {
@@ -458,7 +507,7 @@ Deno.serve(async (req) => {
       const routed = await route("chat", reviewMessages, user.id, tried, false);
       if (!routed) {
         await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable", detail: { tried } });
-        return Response.json({ error: "all AI providers unavailable (キー未設定またはクールダウン中)" }, { status: 503, headers: cors });
+        return Response.json({ error: failureText(tried), tried }, { status: 503, headers: cors });
       }
       const review = normalizeReview(routed.result.text);
       await logAi({ userId: user.id, provider: routed.provider, purpose, ok: true, detail: { depth: review?.depth ?? null, tried } });
@@ -478,7 +527,7 @@ Deno.serve(async (req) => {
     const routed = await route(purpose, messages, user.id, tried);
     if (!routed) {
       await logAi({ userId: user.id, provider: "-", purpose, ok: false, error: "all providers unavailable", detail: { tried } });
-      return Response.json({ error: "all AI providers unavailable (キー未設定またはクールダウン中)" }, { status: 503, headers: cors });
+      return Response.json({ error: failureText(tried), tried }, { status: 503, headers: cors });
     }
     let provider = routed.provider;
     let result = routed.result;
