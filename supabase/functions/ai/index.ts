@@ -70,7 +70,7 @@ const cors = {
 };
 
 type Msg = { role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string; name?: string };
-type ToolCall = { id: string; name: string; args: Record<string, unknown> };
+type ToolCall = { id: string; name: string; args: Record<string, unknown>; thoughtSignature?: string };
 type ProviderResult = { text: string; toolCalls: ToolCall[] };
 type Tried = { provider: string; ok: boolean; error?: string };
 const redactBody = (t: string) => String(t ?? "").replace(/([?&]key=)[^&\s"']+/gi, "$1[redacted]").slice(0, 800);
@@ -173,7 +173,7 @@ async function callGemini(messages: Msg[], model: string, withTools = true): Pro
       const parts: unknown[] = [];
       if (m.content) parts.push({ text: m.content });
       for (const c of (m.tool_calls as ToolCall[] | undefined) ?? []) {
-        parts.push({ functionCall: { name: c.name, args: c.args } });
+        parts.push({ functionCall: { name: c.name, args: c.args }, ...(c.thoughtSignature ? { thoughtSignature: c.thoughtSignature } : {}) });
       }
       contents.push({ role: "model", parts });
     } else {
@@ -200,11 +200,14 @@ async function callGemini(messages: Msg[], model: string, withTools = true): Pro
   }
   const j = await r.json();
   const c = j.candidates?.[0]?.content ?? {};
-  const text = (c.parts ?? []).filter((p: { text?: string }) => p.text).map((p: { text: string }) => p.text).join("\n");
+  const text = (c.parts ?? [])
+    .filter((p: { text?: string; thought?: boolean }) => p.text && !p.thought)
+    .map((p: { text: string }) => p.text).join("\n");
   const toolCalls: ToolCall[] = (c.parts ?? [])
     .filter((p: { functionCall?: { name: string; args: Record<string, unknown> } }) => p.functionCall)
-    .map((p: { functionCall: { name: string; args: Record<string, unknown> } }, i: number) => ({
+    .map((p: { functionCall: { name: string; args: Record<string, unknown> }; thoughtSignature?: string }, i: number) => ({
       id: `g${Date.now()}_${i}`, name: p.functionCall.name, args: p.functionCall.args ?? {},
+      thoughtSignature: p.thoughtSignature,
     }));
   return { text, toolCalls };
 }
@@ -545,7 +548,24 @@ Deno.serve(async (req) => {
       result = again.result;
     }
 
-    const text = result.text || "(返答を生成できませんでした)";
+    let text = result.text;
+    if (!text) {
+      // ツール往復で空になった場合の保険: ツール無しで一度だけ素の回答を作る。
+      cooldownUntil.delete("gemini");
+      cooldownUntil.delete("nim");
+      const plain: Msg[] = [
+        { role: "system", content: SYSTEM_PROMPT + (nowCtx ? `\n現在時刻: ${nowCtx}` : "") },
+        ...history,
+        { role: "user", content: String(body.message ?? "") },
+      ];
+      const plainRouted = await route(purpose, plain, user.id, tried, false);
+      if (plainRouted?.result.text) {
+        provider = plainRouted.provider;
+        result = plainRouted.result;
+        text = result.text;
+      }
+    }
+    text = text || "(返答を生成できませんでした)";
     await logAi({ userId: user.id, provider, purpose, ok: true, detail: { proposals: proposals.length, tried } });
     return Response.json({ text, provider, tried, proposals }, { headers: cors });
   } catch (e) {
