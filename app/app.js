@@ -393,17 +393,25 @@ async function loadItems() {
   state.loaded = true;
   state.lastSync = Date.now();
   const mbRows = (r2.data || []).map(t => ({
-    id: "mb_" + t.task_id, mb: true, kind: "task", title: t.title,
-    due: t.due_iso, category: t.class_name || "ManageBac", est_minutes: null,
+    id: "mb_" + t.task_id, mb_id: t.task_id, mb: true, kind: "task", title: t.title,
+    due: t.due_iso, category: t.class_name || "ManageBac",
+    est_minutes: t.est_minutes ?? null,
     done: ["Submitted", "Complete", "Excused"].includes(t.status),
     body: t.detail || "", url: t.url, mb_status: t.status || "", submittable: !!t.submittable,
+    difficulty: t.difficulty ?? null, importance: t.importance ?? null,
+    ai_score: t.ai_score ?? null, scored_at: t.scored_at ?? null,
+    plan_day: t.plan_day ?? null,
+    scheduled_start: t.scheduled_start ?? null, scheduled_end: t.scheduled_end ?? null,
     created_at: t.fetched_at, updated_at: t.fetched_at,
   }));
+  const mbSample = (r2.data || [])[0] || null;
+  state.mbRaw = mbSample;
+  state.mbHasScoreCols = !!mbSample && ("plan_day" in mbSample) && ("scored_at" in mbSample);
   state.items = [...(data || []), ...mbRows];
   cacheSave();
   renderApp();
   updateIdentity();
-  const open = visibleItems().filter(i => i.kind === "task" && !i.done && !i.mb);
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done);
   if (open.length && localStorage.getItem("sec_autoplan") !== "0") {
     setTimeout(() => autoPlan({ silent: true }), 600);
   }
@@ -528,7 +536,7 @@ function projectForTask(i) {
   ));
 }
 function taskScore(i, { now = new Date(), free = null } = {}) {
-  if (!i || i.done || i.mb || isStale(i)) return -Infinity;
+  if (!i || i.done || isStale(i)) return -Infinity;
   let score = 0;
   const days = dueDays(i.due, now);
   if (days == null) score += 8;
@@ -605,7 +613,7 @@ function todayCandidates(limit = 4, { now = new Date(), free } = {}) {
   const f = free === undefined ? freeMinutesNow(now) : free;
   const s = startOfDay(now), e = endOfDay(now);
   const pool = visibleItems().filter(i => {
-    if (i.kind !== "task" || i.done || i.mb) return false;
+    if (i.kind !== "task" || i.done) return false;
     if (i.scheduled_start) {
       const d = new Date(i.scheduled_start);
       if (d > e && !(i.due && new Date(i.due) <= e)) return false;
@@ -621,8 +629,12 @@ function todayCandidates(limit = 4, { now = new Date(), free } = {}) {
 async function autoPlan({ manual = false, silent = false } = {}) {
   if (state.planning || !state.loaded) return;
   if (!manual && Date.now() - state.planAt < 10 * 60 * 1000) return;
-  const open = visibleItems().filter(i => i.kind === "task" && !i.done && !i.mb);
-  if (!open.length) { if (manual) toast("計画するタスクがありません"); return; }
+  const open = visibleItems().filter(i => i.kind === "task" && !i.done);
+  if (!open.length) { if (manual) toast("計画するタスクがありません(タスクを追加するか、ManageBacを取り込んでください)"); return; }
+  if (!open.some(i => !i.mb) && state.items.length && !("scheduled_start" in state.items[0])) {
+    if (manual) toast("先に supabase/phase3.sql を再実行してください", 5000);
+    return;
+  }
   if (state.items.length && !("scheduled_start" in state.items[0])) {
     if (manual) toast("先に supabase/phase2.sql を実行してください", 4500);
     return;
@@ -730,8 +742,8 @@ const atMinutes = (day, m) => { const x = new Date(day); x.setHours(0, 0, 0, 0);
 const SCORE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const scoring = { running: false, at: 0, lastError: "", summary: "" };
 
-const needScore = i => i.kind === "task" && !i.done && !i.mb && (!i.scored_at || (Date.now() - new Date(i.scored_at).getTime()) > SCORE_STALE_MS);
-const scoredTasks = () => visibleItems().filter(i => i.kind === "task" && !i.done && !i.mb && i.ai_score);
+const needScore = i => i.kind === "task" && !i.done && (!i.scored_at || (Date.now() - new Date(i.scored_at).getTime()) > SCORE_STALE_MS);
+const scoredTasks = () => visibleItems().filter(i => i.kind === "task" && !i.done && i.ai_score);
 const unscoredCount = () => visibleItems().filter(needScore).length;
 
 function taskPayload(i) {
@@ -765,8 +777,13 @@ async function scoreTasks({ manual = false, limit = 40 } = {}) {
   if (!state.loaded) return;
   const targets = visibleItems().filter(needScore).slice(0, limit);
   if (!targets.length) { if (manual) toast("推定が必要なタスクはありません"); return; }
-  if (!state.items.length || !("ai_score" in state.items[0])) {
-    if (manual) toast("先に supabase/phase3.sql を再実行してください", 5000);
+  const mbTasks = targets.filter(i => i.mb);
+  const missing = [];
+  if (!state.items.length || !("ai_score" in state.items[0])) missing.push("sec_items");
+  // ManageBac行はスクレイパーが返す列に ai_score が無い場合があるため、取得結果で判定する
+  if (mbTasks.length && !state.mbHasScoreCols) missing.push("managebac_tasks");
+  if (missing.length) {
+    if (manual) toast(`先に supabase/phase3.sql を再実行してください (${missing.join(" / ")})`, 6000);
     return;
   }
   scoring.running = true;
@@ -814,25 +831,34 @@ async function applyScoring(items) {
     if (!it) continue;
     const dayOffset = Number.isFinite(s.day_offset) ? clamp(s.day_offset, 0, 7) : null;
     const planDay = dayOffset == null ? null : ymd(addDays(today, dayOffset));
-    const rec = {
-      id: it.id, kind: it.kind, title: it.title, body: it.body || "",
-      due: it.due, category: it.category || "",
       // ユーザーが手で入れた見積りは尊重し、無い場合だけAI値を使う
-      est_minutes: it.est_minutes ?? s.est_minutes ?? null,
-      ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
-      difficulty: s.difficulty ?? null,
-      importance: s.importance ?? null,
-      ai_score: { est_minutes: s.est_minutes ?? null, difficulty: s.difficulty ?? null, importance: s.importance ?? null, reason: s.reason || "" },
-      scored_at: now,
-      ai_score_at: now,
-      plan_day: planDay,
+    const est = it.est_minutes ?? s.est_minutes ?? null;
+    const aiScore = {
+      est_minutes: s.est_minutes ?? null, difficulty: s.difficulty ?? null,
+      importance: s.importance ?? null, reason: s.reason || "",
     };
+    const rec = it.mb
+      ? { task_id: it.mb_id, est_minutes: est, difficulty: s.difficulty ?? null,
+          importance: s.importance ?? null, ai_score: aiScore, scored_at: now, plan_day: planDay }
+      : { id: it.id, kind: it.kind, title: it.title, body: it.body || "",
+          due: it.due, category: it.category || "", est_minutes: est,
+          ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
+          difficulty: s.difficulty ?? null, importance: s.importance ?? null,
+          ai_score: aiScore, scored_at: now, ai_score_at: now, plan_day: planDay };
     patch.push(rec);
     scored.push({ it, s, planDay, dayOffset });
   }
   if (!patch.length) return;
-  const { error } = await sb.from("sec_items").upsert(patch);
-  if (error) throw new Error(error.message);
+  const own = patch.filter(r => r.id);
+  const mbPatch = patch.filter(r => r.task_id);
+  if (own.length) {
+    const { error } = await sb.from("sec_items").upsert(own);
+    if (error) throw new Error(error.message);
+  }
+  if (mbPatch.length) {
+    const { error } = await sb.from("managebac_tasks").upsert(mbPatch);
+    if (error) throw new Error(error.message);
+  }
   for (const { it, s, planDay } of scored) {
     it.est_minutes = it.est_minutes ?? s.est_minutes ?? null;
     it.difficulty = s.difficulty ?? null;
@@ -844,6 +870,22 @@ async function applyScoring(items) {
   }
   cacheSave();
   await assignDays(scored);
+}
+
+/* 予定を書き戻すレコード(sec_items と managebac_tasks で列が違うので分ける) */
+function schedRec(it, planDay, startISO, endISO) {
+  const common = {
+    est_minutes: it.est_minutes ?? null,
+    difficulty: it.difficulty ?? null, importance: it.importance ?? null,
+    ai_score: it.ai_score ?? null, scored_at: it.scored_at, plan_day: planDay,
+    scheduled_start: startISO, scheduled_end: endISO,
+  };
+  if (it.mb) return { task_id: it.mb_id, ...common };
+  return {
+    id: it.id, kind: it.kind, title: it.title, body: it.body || "",
+    due: it.due, category: it.category || "", ai_hidden: !!it.ai_hidden,
+    priority: it.priority || 0, ai_score_at: it.ai_score_at, ...common,
+  };
 }
 
 /* plan_day に沿って scheduled_start を組み、今日の分をタイムラインへ置く */
@@ -901,16 +943,7 @@ async function assignDays(scored) {
       blocks.push({ s: placed, e: placed + est });
       blocks.sort((a, b) => a.s - b.s);
       used += est;
-      upserts.push({
-        id: it.id, kind: it.kind, title: it.title, body: it.body || "",
-        due: it.due, category: it.category || "", est_minutes: it.est_minutes,
-        ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
-        difficulty: it.difficulty ?? null, importance: it.importance ?? null,
-        ai_score: it.ai_score ?? null, scored_at: it.scored_at, ai_score_at: it.ai_score_at,
-        plan_day: ymd(startDate),
-        scheduled_start: startDate.toISOString(),
-        scheduled_end: endDate.toISOString(),
-      });
+      upserts.push(schedRec(it, ymd(startDate), startDate.toISOString(), endDate.toISOString()));
       it.scheduled_start = startDate.toISOString();
       it.scheduled_end = endDate.toISOString();
       it.plan_day = ymd(startDate);
@@ -923,24 +956,21 @@ async function assignDays(scored) {
     for (const it of list) {
       const schedDay = it.scheduled_start ? ymd(new Date(it.scheduled_start)) : "";
       const keepSchedule = schedDay === dayKey;
-      upserts.push({
-        id: it.id, kind: it.kind, title: it.title, body: it.body || "",
-        due: it.due, category: it.category || "", est_minutes: it.est_minutes,
-        ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
-        difficulty: it.difficulty ?? null, importance: it.importance ?? null,
-        ai_score: it.ai_score ?? null, scored_at: it.scored_at, ai_score_at: it.ai_score_at,
-        plan_day: dayKey,
-        scheduled_start: keepSchedule ? it.scheduled_start : null,
-        scheduled_end: keepSchedule ? (it.scheduled_end ?? null) : null,
-      });
+      upserts.push(schedRec(it, dayKey, keepSchedule ? it.scheduled_start : null, keepSchedule ? (it.scheduled_end ?? null) : null));
       it.plan_day = dayKey;
       if (!keepSchedule) { it.scheduled_start = null; it.scheduled_end = null; }
     }
   }
 
-  if (upserts.length) {
-    const { error } = await sb.from("sec_items").upsert(upserts);
+  const ownUp = upserts.filter(r => r.id);
+  const mbUp = upserts.filter(r => r.task_id);
+  if (ownUp.length) {
+    const { error } = await sb.from("sec_items").upsert(ownUp);
     if (error) console.warn("assignDays:", error.message);
+  }
+  if (mbUp.length) {
+    const { error } = await sb.from("managebac_tasks").upsert(mbUp);
+    if (error) console.warn("assignDays(mb):", error.message);
   }
   cacheSave();
   renderList();

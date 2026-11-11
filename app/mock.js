@@ -170,7 +170,10 @@
     sec_projects: seedProjects.map(x => ({ ...x })),
     sec_milestones: seedMilestones.map(x => ({ ...x })),
     sec_memory: seedMemory.map(x => ({ ...x })),
-    managebac_tasks: seedMb.map(x => ({ ...x })),
+    managebac_tasks: seedMb.map(x => ({
+      ai_score: null, scored_at: null, difficulty: null, importance: null,
+      plan_day: null, est_minutes: null, scheduled_start: null, scheduled_end: null, ...x,
+    })),
     sec_ics_tokens: [{ user_id: "u1", token: "demo-token-123" }],
   };
 

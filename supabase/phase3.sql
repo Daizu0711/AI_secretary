@@ -39,6 +39,20 @@ alter table public.sec_items add column if not exists plan_day date;
 create index if not exists sec_items_plan_day_idx on public.sec_items (user_id, plan_day);
 create index if not exists sec_items_scored_idx   on public.sec_items (user_id, scored_at);
 
+-- ---------- managebac_tasks: AI採点と日別割り当て(アプリ側で書き込む) ----------
+-- スクレイパーは触らない列。アプリが採点結果と予定時刻だけを追記する。
+alter table public.managebac_tasks add column if not exists ai_score jsonb;
+alter table public.managebac_tasks add column if not exists scored_at timestamptz;
+alter table public.managebac_tasks add column if not exists difficulty integer;
+alter table public.managebac_tasks add column if not exists importance integer;
+alter table public.managebac_tasks add column if not exists plan_day date;
+alter table public.managebac_tasks add column if not exists est_minutes integer;
+alter table public.managebac_tasks add column if not exists scheduled_start timestamptz;
+alter table public.managebac_tasks add column if not exists scheduled_end timestamptz;
+
+create index if not exists managebac_tasks_plan_day_idx on public.managebac_tasks (plan_day);
+create index if not exists managebac_tasks_sched_idx    on public.managebac_tasks (scheduled_start);
+
 create index if not exists sec_projects_user_idx on public.sec_projects (user_id, archived);
 create index if not exists sec_projects_due_idx  on public.sec_projects (user_id, due);
 
