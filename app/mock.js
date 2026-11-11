@@ -161,8 +161,12 @@
     { id: "ms8", user_id: "u1", project_id: "prj-math", title: "題材を決める", due: at(3, 23, 59), done: false, done_at: null, sort: 1, created_at: minsAgo(8000) },
   ];
 
+  const withScoreCols = x => ({
+    ai_score: null, ai_score_at: null, difficulty: null, importance: null,
+    scored_at: null, plan_day: null, ...x,
+  });
   const db = {
-    sec_items: seedItems.map(x => ({ ...x })),
+    sec_items: seedItems.map(withScoreCols),
     sec_projects: seedProjects.map(x => ({ ...x })),
     sec_milestones: seedMilestones.map(x => ({ ...x })),
     sec_memory: seedMemory.map(x => ({ ...x })),
@@ -265,6 +269,26 @@
     functions: {
       async invoke(name, opts = {}) {
         const msg = String(opts?.body?.message || "");
+        if (name === "ai" && opts?.body?.purpose === "score_tasks") {
+          const tasks = (opts.body.tasks || []);
+          const items = tasks.map((t, idx) => {
+            const title = String(t.title || "");
+            let est = 30, diff = 3, imp = 3, off = idx % 3;
+            if (/レポート|EE|構成/.test(title)) { est = 60; diff = 4; imp = 5; off = 0; }
+            else if (/TOK|エッセイ/.test(title)) { est = 45; diff = 5; imp = 4; off = 0; }
+            else if (/数学|演習/.test(title)) { est = 30; diff = 3; imp = 3; off = 0; }
+            else if (/単語|暗記/.test(title)) { est = 20; diff = 1; imp = 2; off = 1; }
+            else if (/プリント|復習/.test(title)) { est = 25; diff = 2; imp = 2; off = 2; }
+            return { id: t.id, est_minutes: est, difficulty: diff, importance: imp, day_offset: off, reason: "内容と締切から推定(モック)" };
+          });
+          return {
+            data: {
+              text: "(モックの採点結果)", provider: "gemini", tried: [{ provider: "gemini", ok: true }], proposals: [],
+              scoring: { items, summary: "締切が近く難易度の高いものを今日〜明日に、暗記系は後半の日に分けました。" },
+            },
+            error: null,
+          };
+        }
         if (name === "ai" && opts?.body?.purpose === "project_review") {
           return {
             data: {

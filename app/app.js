@@ -407,6 +407,10 @@ async function loadItems() {
   if (open.length && localStorage.getItem("sec_autoplan") !== "0") {
     setTimeout(() => autoPlan({ silent: true }), 600);
   }
+  // AI推定が未実施/古いタスクがあれば、自動でスコアリングする
+  if (open.length && localStorage.getItem("sec_autoscore") !== "0" && unscoredCount()) {
+    setTimeout(() => scoreTasks({ limit: 25 }), 1600);
+  }
 }
 async function loadMemory() {
   const { data } = await sb.from("sec_memory").select("*").order("created_at");
@@ -719,6 +723,243 @@ async function autoPlan({ manual = false, silent = false } = {}) {
   if (manual) toast(changed.length ? "計画を組み直しました" : "計画は最新です");
 }
 const atMinutes = (day, m) => { const x = new Date(day); x.setHours(0, 0, 0, 0); x.setMinutes(m); return x; };
+
+/* ---------------------------------------------------------------------------
+   6.5 AIスコアリング(所要時間・難易度・重要度)と日別の自動割り当て
+--------------------------------------------------------------------------- */
+const SCORE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+const scoring = { running: false, at: 0, lastError: "", summary: "" };
+
+const needScore = i => i.kind === "task" && !i.done && !i.mb && (!i.scored_at || (Date.now() - new Date(i.scored_at).getTime()) > SCORE_STALE_MS);
+const scoredTasks = () => visibleItems().filter(i => i.kind === "task" && !i.done && !i.mb && i.ai_score);
+const unscoredCount = () => visibleItems().filter(needScore).length;
+
+function taskPayload(i) {
+  const pj = projectForTask(i);
+  return {
+    id: i.id,
+    title: i.title,
+    category: i.category || "",
+    due: i.due || null,
+    est_minutes: i.est_minutes ?? null,
+    priority: i.priority ?? 0,
+    body: (i.body || "").slice(0, 200),
+    project: pj ? { kind: pj.kind, title: pj.title, stage: pj.stage, due: pj.due } : null,
+  };
+}
+function scoreBadge(i) {
+  if (!i.ai_score) return "";
+  const d = i.difficulty, im = i.importance;
+  if (!d && !im) return "";
+  const bars = n => "●".repeat(n) + "○".repeat(5 - n);
+  return `<span class="pill gray" title="難易度 / 重要度">難${bars(d || 0)} 重${bars(im || 0)}</span>`;
+}
+function scoreReason(i) {
+  const s = i.ai_score;
+  if (!s) return "";
+  return `<span class="pill gray" title="${esc(s.reason || "")}">AI推定</span>`;
+}
+
+async function scoreTasks({ manual = false, limit = 40 } = {}) {
+  if (scoring.running) return;
+  if (!state.loaded) return;
+  const targets = visibleItems().filter(needScore).slice(0, limit);
+  if (!targets.length) { if (manual) toast("推定が必要なタスクはありません"); return; }
+  if (!state.items.length || !("ai_score" in state.items[0])) {
+    if (manual) toast("先に supabase/phase3.sql を再実行してください", 5000);
+    return;
+  }
+  scoring.running = true;
+  scoring.at = Date.now();
+  scoring.lastError = "";
+  if (manual) toast(`${targets.length}件をAIが推定中…`, 4000);
+  renderList();
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const { data, error } = await withTimeout(sb.functions.invoke("ai", {
+      body: {
+        purpose: "score_tasks",
+        tasks: targets.map(taskPayload),
+        tz,
+        now: new Date().toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short", timeZone: tz }),
+      },
+    }), 90000);
+    if (error) {
+      let m = error.message;
+      try { const j = await error.context.json(); m = j.error || m; } catch {}
+      throw new Error(m);
+    }
+    const res = data?.scoring;
+    if (!res || !res.items?.length) throw new Error("AIが推定結果を返しませんでした");
+    scoring.summary = res.summary || "";
+    await applyScoring(res.items);
+    toast(`${res.items.length}件の所要時間・難易度・重要度を推定しました`, 4000);
+  } catch (e) {
+    scoring.lastError = e.message || String(e);
+    console.warn("scoreTasks:", e);
+    if (manual) toast("AI推定に失敗: " + scoring.lastError.slice(0, 120), 6000);
+  } finally {
+    scoring.running = false;
+    renderList();
+  }
+}
+
+async function applyScoring(items) {
+  const now = new Date().toISOString();
+  const today = startOfDay();
+  const patch = [];
+  const scored = [];
+  for (const s of items) {
+    const it = state.items.find(x => x.id === s.id);
+    if (!it) continue;
+    const dayOffset = Number.isFinite(s.day_offset) ? clamp(s.day_offset, 0, 7) : null;
+    const planDay = dayOffset == null ? null : ymd(addDays(today, dayOffset));
+    const rec = {
+      id: it.id, kind: it.kind, title: it.title, body: it.body || "",
+      due: it.due, category: it.category || "",
+      // ユーザーが手で入れた見積りは尊重し、無い場合だけAI値を使う
+      est_minutes: it.est_minutes ?? s.est_minutes ?? null,
+      ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
+      difficulty: s.difficulty ?? null,
+      importance: s.importance ?? null,
+      ai_score: { est_minutes: s.est_minutes ?? null, difficulty: s.difficulty ?? null, importance: s.importance ?? null, reason: s.reason || "" },
+      scored_at: now,
+      ai_score_at: now,
+      plan_day: planDay,
+    };
+    patch.push(rec);
+    scored.push({ it, s, planDay, dayOffset });
+  }
+  if (!patch.length) return;
+  const { error } = await sb.from("sec_items").upsert(patch);
+  if (error) throw new Error(error.message);
+  for (const { it, s, planDay } of scored) {
+    it.est_minutes = it.est_minutes ?? s.est_minutes ?? null;
+    it.difficulty = s.difficulty ?? null;
+    it.importance = s.importance ?? null;
+    it.ai_score = { est_minutes: s.est_minutes ?? null, difficulty: s.difficulty ?? null, importance: s.importance ?? null, reason: s.reason || "" };
+    it.scored_at = now;
+    it.ai_score_at = now;
+    it.plan_day = planDay;
+  }
+  cacheSave();
+  await assignDays(scored);
+}
+
+/* plan_day に沿って scheduled_start を組み、今日の分をタイムラインへ置く */
+async function assignDays(scored) {
+  const today = startOfDay();
+  const byDay = new Map();
+  for (const { it, planDay } of scored) {
+    if (!planDay) continue;
+    const arr = byDay.get(planDay) || [];
+    arr.push(it);
+    byDay.set(planDay, arr);
+  }
+  const todayKey = ymd(today);
+  const others = new Map();
+  const upserts = [];
+
+  // 今日以外: その日の窓に順番に積むだけ(タイムライン表示はされない)
+  for (const [dayKey, list] of byDay) {
+    if (dayKey === todayKey) continue;
+    const day = dayFromKey(dayKey);
+    others.set(dayKey, list);
+  }
+
+  // 今日の分: 現在時刻以降の窓に、難易度の高い順→締切順で配置
+  const todayItems = (byDay.get(todayKey) || []).slice();
+  if (todayItems.length) {
+    const now = new Date();
+    const cap = todayCapacity();
+    const ordered = todayItems.sort((a, b) => {
+      const ai = taskScore(a, { now }), bi = taskScore(b, { now });
+      return bi - ai;
+    });
+    const blocks = plannedToday()
+      .filter(i => !todayItems.some(t => t.id === i.id))
+      .map(i => {
+        const s = new Date(i.scheduled_start);
+        const e = i.scheduled_end ? new Date(i.scheduled_end) : new Date(s.getTime() + estMinutes(i) * 60000);
+        return { s: s.getHours() * 60 + s.getMinutes(), e: e.getHours() * 60 + e.getMinutes() };
+      });
+    let used = 0;
+    for (const it of ordered) {
+      const est = estMinutes(it);
+      const maxToday = Math.min(planCap(today), Math.max(cap, est));
+      if (used + est > maxToday) continue;
+      let placed = null;
+      for (const [ws, we] of planWindows(now)) {
+        const from = Math.max(ws, now.getHours() * 60 + now.getMinutes() + 10);
+        if (we - from < Math.min(est, 20)) continue;
+        const start = slotIn(blocks, est, from, we);
+        if (start != null) { placed = start; break; }
+      }
+      if (placed == null) continue;
+      const startDate = atMinutes(today, placed);
+      const endDate = new Date(startDate.getTime() + est * 60000);
+      blocks.push({ s: placed, e: placed + est });
+      blocks.sort((a, b) => a.s - b.s);
+      used += est;
+      upserts.push({
+        id: it.id, kind: it.kind, title: it.title, body: it.body || "",
+        due: it.due, category: it.category || "", est_minutes: it.est_minutes,
+        ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
+        difficulty: it.difficulty ?? null, importance: it.importance ?? null,
+        ai_score: it.ai_score ?? null, scored_at: it.scored_at, ai_score_at: it.ai_score_at,
+        plan_day: ymd(startDate),
+        scheduled_start: startDate.toISOString(),
+        scheduled_end: endDate.toISOString(),
+      });
+      it.scheduled_start = startDate.toISOString();
+      it.scheduled_end = endDate.toISOString();
+      it.plan_day = ymd(startDate);
+    }
+  }
+
+  // 今日以外: plan_day を確定し、今日の予定として残っている時刻は外す
+  // (翌日以降の時刻は自動計画 autoPlan が別途入れる)
+  for (const [dayKey, list] of others) {
+    for (const it of list) {
+      const schedDay = it.scheduled_start ? ymd(new Date(it.scheduled_start)) : "";
+      const keepSchedule = schedDay === dayKey;
+      upserts.push({
+        id: it.id, kind: it.kind, title: it.title, body: it.body || "",
+        due: it.due, category: it.category || "", est_minutes: it.est_minutes,
+        ai_hidden: !!it.ai_hidden, priority: it.priority || 0,
+        difficulty: it.difficulty ?? null, importance: it.importance ?? null,
+        ai_score: it.ai_score ?? null, scored_at: it.scored_at, ai_score_at: it.ai_score_at,
+        plan_day: dayKey,
+        scheduled_start: keepSchedule ? it.scheduled_start : null,
+        scheduled_end: keepSchedule ? (it.scheduled_end ?? null) : null,
+      });
+      it.plan_day = dayKey;
+      if (!keepSchedule) { it.scheduled_start = null; it.scheduled_end = null; }
+    }
+  }
+
+  if (upserts.length) {
+    const { error } = await sb.from("sec_items").upsert(upserts);
+    if (error) console.warn("assignDays:", error.message);
+  }
+  cacheSave();
+  renderList();
+}
+
+/* その日にやる予定のタスク(AIの plan_day + scheduled_start) */
+function plannedForDay(day) {
+  const key = ymd(day);
+  return visibleItems()
+    .filter(i => i.kind === "task" && !i.done)
+    // plan_day があればそれを正とし、scheduled_start は plan_day 未設定のときだけ使う
+    .filter(i => i.plan_day ? i.plan_day === key : (i.scheduled_start && sameDay(new Date(i.scheduled_start), day)))
+    .sort((a, b) => {
+      const as = a.scheduled_start ? +new Date(a.scheduled_start) : Infinity;
+      const bs = b.scheduled_start ? +new Date(b.scheduled_start) : Infinity;
+      if (as !== bs) return as - bs;
+      return (b.importance || 0) - (a.importance || 0);
+    });
+}
 
 /* ---------------------------------------------------------------------------
    7. 共通 UI
@@ -1087,6 +1328,7 @@ function rowHTML(i) {
   if (i.est_minutes) chips.push(`<span class="pill gray">${i.est_minutes}分</span>`);
   if (i.priority > 0) chips.push(`<span class="pill warn">${i.priority >= 2 ? "高" : "中"}</span>`);
   if (i.ai_hidden) chips.push(`<span class="pill gray">AI非公開</span>`);
+  if (i.difficulty || i.importance) chips.push(scoreBadge(i));
   if (i.mb) chips.push(`<span class="pill ok">MB${i.mb_status ? " · " + esc(i.mb_status) : ""}</span>`);
   const note = !i.mb && i.kind === "note" && i.body ? `<div class="row-note">${esc(i.body.slice(0, 140))}</div>` : "";
   const check = i.kind === "task" && !i.mb
@@ -1181,6 +1423,7 @@ function todayHTML() {
     ${todayProjectsHTML()}
     ${capacityHTML()}
     ${timelineHTML()}
+    ${aiPlanSectionHTML()}
     ${groupsHTML(visibleItems())}
     ${!visibleItems().length ? emptyHTML("今日はまだ何もありません", "下の入力からタスクを追加するか、秘書に話しかけてください。", `<button class="btn btn-primary" data-act="focus-quick">${icon("plus")}タスクを追加</button>`, "sun") : ""}
     ${weekHTML()}
@@ -1451,6 +1694,42 @@ function projectDetailHTML() {
     </div>
     <div class="sub" style="text-align:center;margin-top:14px">作成 ${new Date(p.created_at || Date.now()).toLocaleDateString("ja-JP")}${p.updated_at ? ` · 更新 ${new Date(p.updated_at).toLocaleDateString("ja-JP")}` : ""}</div>`;
 }
+function aiPlanSectionHTML() {
+  const today = new Date();
+  const days = [];
+  for (let d = 0; d < 5; d++) {
+    const day = addDays(startOfDay(today), d);
+    const list = plannedForDay(day).filter(i => i.kind === "task");
+    if (!list.length) continue;
+    const total = list.reduce((a, i) => a + estMinutes(i), 0);
+    days.push({ day, list, total });
+  }
+  if (!days.length) return "";
+  const busy = scoring.running;
+  return `<section class="card aiplan" style="margin-bottom:16px">
+    <div class="tl-head">
+      <b>${icon("spark")}AIの日別プラン</b>
+      <span>${busy ? "推定中…" : `${scoredTasks().length}件を推定済み`}</span>
+      <button class="qbtn" data-act="ai-score" ${busy ? "disabled" : ""}>${busy ? "推定中…" : "再推定"}</button>
+    </div>
+    ${scoring.summary ? `<p class="sub" style="margin:2px 2px 8px">${esc(scoring.summary)}</p>` : ""}
+    ${days.map(({ day, list, total }, idx) => `
+      <div class="aiplan-day">
+        <div class="aiplan-head">
+          <b>${idx === 0 ? "今日" : day.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" })}</b>
+          <span>${list.length}件 · ${fmtMin(total)}</span>
+        </div>
+        ${list.slice(0, 5).map(i => `<button type="button" class="aiplan-row" data-act="edit" data-id="${i.id}">
+          <span class="aiplan-dot" data-d="${i.difficulty || 0}"></span>
+          <span class="aiplan-title">${esc(i.title)}</span>
+          ${i.scheduled_start ? `<span class="aiplan-time">${fmtClock(i.scheduled_start)}</span>` : `<span class="aiplan-time dim">未定</span>`}
+        </button>`).join("")}
+        ${list.length > 5 ? `<div class="sub" style="padding:2px 8px">他 ${list.length - 5}件</div>` : ""}
+      </div>`).join("")}
+    ${scoring.lastError ? `<div class="sub" style="padding:6px 2px 0;color:var(--danger)">AI推定に失敗: ${esc(scoring.lastError.slice(0, 100))}</div>` : ""}
+  </section>`;
+}
+
 function todayProjectsHTML() {
   if (state.projectsMissing) return "";
   const list = sortProjects(activeProjects()).slice(0, 3);
@@ -2080,6 +2359,7 @@ view.addEventListener("click", async e => {
   const el = e.target.closest("[data-act]");
   if (!el) return;
   const act = el.dataset.act;
+  if (act === "ai-score") { scoreTasks({ manual: true }); return; }
   if (act === "show-stale") {
     localStorage.setItem(STALE_KEY, "1");
     renderApp();
@@ -2434,6 +2714,7 @@ function paletteActions() {
     { id: "settings", label: "設定を開く", icon: "settings", run: () => setView("settings") },
     { id: "focus", label: "集中モードをはじめる", icon: "play", run: () => startFocus(nextTask().item) },
     { id: "replan", label: "計画を組み直す", icon: "refresh", run: () => autoPlan({ manual: true }) },
+    { id: "ai-score", label: "AIで所要時間・難易度・重要度を推定", icon: "spark", run: () => scoreTasks({ manual: true }) },
     { id: "theme", label: "テーマを切り替える", icon: "moon", run: cycleTheme },
     { id: "sync", label: "最新に同期する", icon: "refresh", run: async () => { await loadAll(); toast("同期しました"); } },
     { id: "export", label: "JSONで書き出す", icon: "db", run: exportData },
@@ -3041,6 +3322,12 @@ function renderSettings() {
       <div class="set-row"><div class="set-label"><b>空き時間に自動で割り当てる</b><small>開いたとき・変更時に計画を更新</small></div>
         <div class="set-ctl"><input type="checkbox" class="switch" id="optAuto" ${autoOn ? "checked" : ""}></div>
       </div>
+      <div class="set-row"><div class="set-label"><b>AIで所要時間・難易度・重要度を自動推定</b><small>新しいタスクをAIが採点し、やる日を振り分けます</small></div>
+        <div class="set-ctl"><input type="checkbox" class="switch" id="optAutoscore" ${localStorage.getItem("sec_autoscore") !== "0" ? "checked" : ""}></div>
+      </div>
+      <div class="set-row"><div class="set-label"><b>いま推定を実行</b><small>${unscoredCount() ? `${unscoredCount()}件が未推定` : "すべて推定済み"}</small></div>
+        <div class="set-ctl"><button class="btn btn-ghost btn-sm" id="scoreNow" ${scoring.running ? "disabled" : ""}>${icon("spark")}${scoring.running ? "推定中…" : "AI推定"}</button></div>
+      </div>
       <div class="set-row"><div class="set-label"><b>1ヶ月以上前の期限切れを表示</b><small>既定は非表示。30日以上前の未完了は一覧・カレンダー・件数から隠します(データは残ります)</small></div>
         <div class="set-ctl"><input type="checkbox" class="switch" id="optShowStale" ${staleHidden() ? "" : "checked"}></div>
       </div>
@@ -3155,6 +3442,13 @@ function bindSettings() {
     if (e.target.checked) autoPlan({ manual: true });
     else toast("自動割り当てをオフにしました");
   };
+  $("#optAutoscore").onchange = e => {
+    localStorage.setItem("sec_autoscore", e.target.checked ? "1" : "0");
+    toast(e.target.checked ? "AI推定をオンにしました" : "AI推定をオフにしました");
+    if (e.target.checked && unscoredCount()) scoreTasks({ limit: 25 });
+  };
+  const scoreBtn = $("#scoreNow");
+  if (scoreBtn) scoreBtn.onclick = () => scoreTasks({ manual: true }).then(() => { if (state.view === "settings") renderSettings(); });
   $("#optShowStale").onchange = e => {
     localStorage.setItem(STALE_KEY, e.target.checked ? "1" : "0");
     renderApp();
@@ -3362,5 +3656,5 @@ if (new URLSearchParams(location.search).get("gcal") === "connected") {
 }
 
 /* デバッグ用(コンソールから状態を確認) */
-window.__aiSecretary = { state, sb, loadAll, autoPlan, parseQuick, nextTask, todayCandidates, taskScore, taskReasons, freeMinutesNow };
+window.__aiSecretary = { state, sb, loadAll, autoPlan, parseQuick, nextTask, todayCandidates, taskScore, taskReasons, freeMinutesNow, scoreTasks, plannedForDay, unscoredCount };
 })();

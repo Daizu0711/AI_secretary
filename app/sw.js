@@ -1,5 +1,5 @@
 /* AI秘書 service worker — アプリシェルをキャッシュしてオフラインでも開けるようにする */
-const VERSION = "v2.4.0";
+const VERSION = "v2.5.0";
 const SHELL = [
   "./",
   "./index.html",

@@ -11,9 +11,9 @@ v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザイン�
 
 ※ 画像はモックデータのプレビュー(`?preview=1`)。
 
-| カレンダー | AIヒアリング / 診断 |
-|---|---|
-| <img src="docs/preview-calendar.jpg" width="260" alt="締切カレンダー"> | <img src="docs/preview-ai.jpg" width="260" alt="AI診断"> |
+| カレンダー | AIヒアリング / 診断 | AIの日別プラン |
+|---|---|---|
+| <img src="docs/preview-calendar.jpg" width="240" alt="締切カレンダー"> | <img src="docs/preview-ai.jpg" width="240" alt="AI診断"> | <img src="docs/preview-aiplan.jpg" width="240" alt="AIの日別プラン"> |
 
 <img src="docs/preview-projects.jpg" width="820" alt="プロジェクト一覧(EE / IA / TOK)">
 
@@ -39,6 +39,7 @@ v2 でUI/UXと機能を全面的に刷新した(単一HTMLから、デザイン�
 ### 機能
 
 - **空き時間キャパシティ** — その日の使える時間(30分〜4時間+)を選ぶと、その枠に合わせて自動計画を組み直す
+- **AIによる一括スコアリング** — 未完了タスクの所要時間・難易度(1〜5)・重要度(1〜5)をAIが推定し、締切から逆算して「どの日にやるか」を振り分けて保存。今日ビューの「AIの日別プラン」で日ごとの内容と合計時間を確認でき、今日の分はタイムラインに配置される
 - **自動配置のスコアリング** — 期限・優先度・見積り・現在の空き時間・プロジェクト進度で順位づけ。今日締切は今日中、期限切れは2日以内、週末は19〜22時も配置対象。期限を過ぎる配置は「期限超過」と表示
 - **今日のタスク提案** — NEXT UPに「今日が期限 / 優先度高 / 空き◯分に合う」などの理由と、次点2件を表示。明日以降の予定は「前倒し」として提案
 - **見積り学習** — 集中モードで記録した実績から、カテゴリ別の「見積り÷実績」補正値を計算し、次回の自動計画に反映。設定画面に補正値を表示
@@ -87,6 +88,7 @@ python3 -m http.server 8765
 ## セットアップ
 
 1. Supabase プロジェクトを作成し、`supabase/schema.sql` → `supabase/phase2.sql` → `supabase/phase3.sql` の順に SQL Editor で実行
+   (AI採点を使う場合は phase3 の再実行が必要。`ai_score` / `difficulty` / `importance` / `plan_day` 列が追加される)
    (既存DBがある場合も phase2 / phase3 は冪等なので安全に再実行できる。phase3 を実行するまでPJタブは
    「phase3.sql を実行してください」という案内を表示する。AI診断を使う場合は phase3 を再実行して
    `ai_review` / `ai_review_at` 列も追加すること)
@@ -156,6 +158,11 @@ propose_complete_task / propose_delete_item / propose_memory / propose_schedule 
 `args` はフロントの `applyProposal()` がそのまま消費する形。適用はユーザー承認後に
 アプリ側がユーザー権限(PostgREST/RLS)で行う。
 
+タスク採点は別契約:
+リクエスト `{purpose:"score_tasks", tasks:[{id,title,category,due,est_minutes,priority,body,project}], tz, now}` →
+レスポンス `{text, provider, scoring:{items:[{id,est_minutes,difficulty,importance,day_offset,reason}],summary}}`。
+`difficulty`/`importance` は1〜5、`day_offset` は今日からの日数(0〜7)。AIがJSONを返せない場合は `scoring:null`。
+
 プロジェクト診断は別契約:
 リクエスト `{purpose:"project_review", project:{title,kind,stage,...}, answers:{rq,method,evidence,limits,feedback,blocker}, tz, now}` →
 レスポンス `{text, provider, review:{depth,verdict,strengths,gaps,actions,questions}}`。
@@ -175,6 +182,7 @@ ManageBacの自動取り込みは3時間おき。失敗時は `managebac_import_
 - タスクの`集中をはじめる`: 終了時に実測時間が記録される(見積り学習に使われる)
 - 自然言語: `明日15時 化学 #化学 45分`、`来週月曜 数学 1時間`、`週末 模試 3時間`
 - PJタブ: ステージを押す / 語数を更新 / マイルストーンを追加。「今日やる(45分)」で集中開始
+- 今日の「AIの日別プラン」: 「再推定」でいつでも採点し直せる(設定からも実行可)
 - PJタブ: プロジェクト詳細の「AIヒアリング」→ 6問に回答 → 診断結果の「追加」でタスク化
 - タスクタブ: 「リスト / カレンダー」を切替。日を選ぶと締切・空き時間・AIに相談が出る
 - カレンダーの「AIに相談」: 空き時間と締切を渡して、今やるべき3つを提案させる
