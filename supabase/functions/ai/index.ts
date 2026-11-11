@@ -39,7 +39,7 @@ const validModelId = (s: string) => MODEL_ID_RE.test(s);
 // GEMINI_MODEL を設定した場合は先頭になる。GEMINI_MODELS でカンマ区切りに候補追加可。
 const GEMINI_MODELS = [
   ...(Deno.env.get("GEMINI_MODEL") ? [Deno.env.get("GEMINI_MODEL")!] : []),
-  ...(Deno.env.get("GEMINI_MODELS") ?? "gemini-flash-latest,gemini-pro-latest").split(","),
+  ...(Deno.env.get("GEMINI_MODELS") ?? "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest").split(","),
 ].map((s) => s.trim()).filter((s) => s && validModelId(s));
 const NIM_API_KEY = Deno.env.get("NIM_API_KEY") ?? Deno.env.get("NVIDIA_API_KEY") ?? "";
 const NIM_BASE = (Deno.env.get("NIM_BASE") ?? "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
@@ -431,7 +431,7 @@ Deno.serve(async (req) => {
       }
       lastProbeAt = Date.now();
       const out: Record<string, unknown> = { at: new Date().toISOString() };
-      const gModel = GEMINI_MODELS[0] ?? "gemini-flash-latest";
+      const gModel = GEMINI_MODELS[0] ?? "gemini-3.5-flash-lite";
       const nModel = NIM_MODELS[0] ?? "";
       if (GEMINI_API_KEY) {
         try {

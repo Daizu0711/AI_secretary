@@ -126,7 +126,8 @@ python3 -m http.server 8765
    (gemini_live / nim_live にプロバイダ側の最新一覧が返る)
 
    **モデル名について(2026-11時点)**: Geminiの `gemini-2.x` は退役済みで 404 になる。
-   既定は `gemini-flash-latest,gemini-pro-latest`(latestエイリアスなので常に現行を指す)で、
+   既定は `gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest`。
+   2.5系は新規ユーザーに提供終了しているため、軽量な3.x Flash-Liteを先に試す。
    404/退役を検知したら自動で次の候補モデルにフォールバックする。
    NIMは `integrate.api.nvidia.com/v1/models` で現存確認済みの候補から順に試す。
    個別指定は Secrets で上書き可: `GEMINI_MODEL` / `GEMINI_MODELS`(カンマ区切り) /
